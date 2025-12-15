@@ -921,12 +921,45 @@ export const useWorkflowStore = create<WorkflowStore>()(
 }),
     {
       name: "node-banana-workflow",
-      partialize: (state) => ({
-        nodes: state.nodes,
-        edges: state.edges,
-        edgeStyle: state.edgeStyle,
-        globalImageHistory: state.globalImageHistory,
-      }),
+      version: 1, // Increment to force migration/reset
+      partialize: (state) => {
+        // Remove image data from nodes to save space
+        const nodesWithoutImages = state.nodes.map((node) => {
+          const nodeCopy = { ...node };
+
+          // Remove image data based on node type
+          if (node.type === "imageInput") {
+            nodeCopy.data = { ...node.data, image: null, filename: null, dimensions: null };
+          } else if (node.type === "annotation") {
+            nodeCopy.data = { ...node.data, sourceImage: null, outputImage: null };
+          } else if (node.type === "nanoBanana") {
+            nodeCopy.data = { ...node.data, inputImages: [], outputImage: null };
+          } else if (node.type === "output") {
+            nodeCopy.data = { ...node.data, displayImage: null };
+          }
+
+          return nodeCopy;
+        });
+
+        return {
+          nodes: nodesWithoutImages,
+          edges: state.edges,
+          edgeStyle: state.edgeStyle,
+          // Don't persist image history to save space
+        };
+      },
+      merge: (persistedState: any, currentState) => {
+        // Merge persisted state with current state, ensuring defaults
+        return {
+          ...currentState,
+          ...persistedState,
+          globalImageHistory: [], // Always start with empty history
+          isRunning: false,
+          currentNodeId: null,
+          pausedAtNodeId: null,
+          clipboard: null,
+        };
+      },
     }
   )
 );
