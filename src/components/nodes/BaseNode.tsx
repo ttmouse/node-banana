@@ -62,7 +62,7 @@ export function BaseNode({
   return (
     <>
       <NodeResizer
-        isVisible={selected}
+        isVisible
         minWidth={minWidth}
         minHeight={minHeight}
         lineClassName="!border-transparent"
