@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useRef, useState, useEffect, DragEvent } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  useEffect,
+  DragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   ReactFlow,
   Background,
@@ -13,6 +20,7 @@ import {
   useReactFlow,
   ReactFlowProvider,
   OnConnectEnd,
+  SelectionMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -104,6 +112,9 @@ function WorkflowCanvasInner() {
   const [connectionDrop, setConnectionDrop] = useState<ConnectionDropState | null>(null);
   const [isSplitting, setIsSplitting] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const handlePaneContextMenu = useCallback((event: ReactMouseEvent) => {
+    event.preventDefault();
+  }, []);
 
   const handleConnect = useCallback(
     (connection: Connection) => {
@@ -779,8 +790,9 @@ function WorkflowCanvasInner() {
         fitView
         deleteKeyCode={["Backspace", "Delete"]}
         multiSelectionKeyCode="Shift"
-        selectionOnDrag={false}
-        panOnDrag
+        selectionOnDrag
+        selectionMode={SelectionMode.Partial}
+        panOnDrag={[2]}
         selectNodesOnDrag={false}
         nodeDragThreshold={5}
         className="bg-neutral-900"
@@ -788,6 +800,7 @@ function WorkflowCanvasInner() {
           type: "editable",
           animated: false,
         }}
+        onPaneContextMenu={handlePaneContextMenu}
       >
         <Background color="#404040" gap={20} size={1} />
         <Controls className="bg-neutral-800 border border-neutral-700 rounded-lg shadow-lg [&>button]:bg-neutral-800 [&>button]:border-neutral-700 [&>button]:fill-neutral-300 [&>button:hover]:bg-neutral-700 [&>button:hover]:fill-neutral-100" />
