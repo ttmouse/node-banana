@@ -373,8 +373,8 @@ export function GridSelectorOverlay({
       }}
     >
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-neutral-200 mb-1">选择网格大小</h3>
-        <p className="text-xs text-neutral-400">点击或拖拽来选择分割的行列数</p>
+        <h3 className="text-sm font-medium text-neutral-200 mb-1">Select Grid Size</h3>
+        <p className="text-xs text-neutral-400">Click or drag to select rows and columns</p>
       </div>
 
       <div 
@@ -414,7 +414,7 @@ export function GridSelectorOverlay({
 
       <div className="mb-4 text-center">
         <span className="text-neutral-300 text-sm font-medium">
-          {rows} × {cols} ({rows * cols} 个图片)
+          {rows} × {cols} ({rows * cols} images)
         </span>
       </div>
 
@@ -423,21 +423,21 @@ export function GridSelectorOverlay({
           onClick={onClose}
           className="flex-1 px-3 py-2 text-xs font-medium bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
         >
-          取消
+          Cancel
         </button>
         <button
           onClick={() => onConfirm(rows, cols)}
           className="flex-1 px-3 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
         >
-          分割图像
+          Split Image
         </button>
       </div>
 
       <div className="mt-2 text-center">
         <span className="text-neutral-500 text-[9px]">
-          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">ESC</kbd> 取消
+          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">ESC</kbd> Cancel
           <span className="mx-2">|</span>
-          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">Enter</kbd> 确认
+          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">Enter</kbd> Confirm
         </span>
       </div>
     </div>
