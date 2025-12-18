@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useCallback } from "react";
+import { ReactNode, useCallback, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { NodeResizer, OnResize, useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -34,6 +34,7 @@ export function BaseNode({
   const spaceBarPressed = useWorkflowStore((state) => state.spaceBarPressed);
   const isCurrentlyExecuting = currentNodeId === id;
   const { getNodes, setNodes } = useReactFlow();
+  const [isHovered, setIsHovered] = useState(false);
 
   // Synchronize resize across all selected nodes
   const handleResize: OnResize = useCallback(
@@ -75,6 +76,16 @@ export function BaseNode({
     [selected, isRunning, executeWorkflow, id]
   );
 
+  const handleMouseEnter = useCallback(() => {
+    if (!spaceBarPressed) {
+      setIsHovered(true);
+    }
+  }, [spaceBarPressed]);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsHovered(false);
+  }, []);
+
   return (
     <>
       <NodeResizer
@@ -87,15 +98,20 @@ export function BaseNode({
       />
       <div
         className={`
-          bg-neutral-800 rounded-md shadow-lg border h-full w-full
-          ${isCurrentlyExecuting || isExecuting ? "border-blue-500 ring-1 ring-blue-500/20" : "border-neutral-700"}
-          ${hasError ? "border-red-500" : ""}
-          ${selected ? "border-amber-400 ring-1 ring-amber-300/40" : ""}
+          bg-neutral-800 rounded-md h-full w-full
+          ${isCurrentlyExecuting || isExecuting ? "outline outline-2 outline-blue-500" : ""}
+          ${hasError ? "outline outline-2 outline-red-500" : ""}
+          ${selected ? "outline outline-2 outline-blue-400" : ""}
+          ${isHovered && !selected && !spaceBarPressed ? "outline outline-1 outline-neutral-400" : ""}
           ${className}
         `}
-        style={{ cursor: spaceBarPressed ? 'grab' : 'default' }}
+        style={{ 
+          cursor: spaceBarPressed ? 'grab' : (isHovered ? 'pointer' : 'default')
+        }}
         tabIndex={0}
         onKeyDown={handleKeyDown}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
         <div className="px-3 pt-2 pb-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{title}</span>

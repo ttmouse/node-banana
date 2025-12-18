@@ -96,6 +96,13 @@ interface WorkflowStore {
   globalImageHistory: ImageHistoryItem[];
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => void;
   clearGlobalHistory: () => void;
+  
+  // Undo/Redo
+  historyStack: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }[];
+  historyIndex: number;
+  undo: () => void;
+  redo: () => void;
+  saveToHistory: () => void;
 }
 
 type WorkflowStoreSetter = (
@@ -276,6 +283,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
   currentNodeId: null,
   pausedAtNodeId: null,
   globalImageHistory: [],
+  historyStack: [{ nodes: [], edges: [] }],
+  historyIndex: 0,
 
   setEdgeStyle: (style: EdgeStyle) => {
     set({ edgeStyle: style });
@@ -350,27 +359,50 @@ export const useWorkflowStore = create<WorkflowStore>()(
   },
 
   onNodesChange: (changes: NodeChange<WorkflowNode>[]) => {
-    set((state) => ({
-      nodes: applyNodeChanges(changes, state.nodes),
-    }));
+    set((state) => {
+      const newNodes = applyNodeChanges(changes, state.nodes);
+      // Only save to history if this is not a selection change
+      const hasNonSelectionChange = changes.some(change => change.type !== 'select');
+      if (hasNonSelectionChange) {
+        // Use setTimeout to ensure state is updated before saving to history
+        setTimeout(() => get().saveToHistory(), 0);
+      }
+      return {
+        nodes: newNodes,
+      };
+    });
   },
 
   onEdgesChange: (changes: EdgeChange<WorkflowEdge>[]) => {
-    set((state) => ({
-      edges: applyEdgeChanges(changes, state.edges),
-    }));
+    set((state) => {
+      const newEdges = applyEdgeChanges(changes, state.edges);
+      // Only save to history if this is not a selection change
+      const hasNonSelectionChange = changes.some(change => change.type !== 'select');
+      if (hasNonSelectionChange) {
+        // Use setTimeout to ensure state is updated before saving to history
+        setTimeout(() => get().saveToHistory(), 0);
+      }
+      return {
+        edges: newEdges,
+      };
+    });
   },
 
   onConnect: (connection: Connection) => {
-    set((state) => ({
-      edges: addEdge(
+    set((state) => {
+      const newEdges = addEdge(
         {
           ...connection,
           id: `edge-${connection.source}-${connection.target}-${connection.sourceHandle || "default"}-${connection.targetHandle || "default"}`,
         },
         state.edges
-      ),
-    }));
+      );
+      // Save to history after connection is made
+      setTimeout(() => get().saveToHistory(), 0);
+      return {
+        edges: newEdges,
+      };
+    });
   },
 
   removeEdge: (edgeId: string) => {
@@ -1076,6 +1108,63 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
   clearGlobalHistory: () => {
     set({ globalImageHistory: [] });
+  },
+
+  // Undo/Redo functions
+  saveToHistory: () => {
+    const { nodes, edges, historyStack, historyIndex } = get();
+    
+    // Create a new history snapshot
+    const newHistoryEntry = { 
+      nodes: JSON.parse(JSON.stringify(nodes)), 
+      edges: JSON.parse(JSON.stringify(edges))
+    };
+    
+    // Remove any entries after the current index
+    const newHistoryStack = historyStack.slice(0, historyIndex + 1);
+    
+    // Add the new entry
+    newHistoryStack.push(newHistoryEntry);
+    
+    // Limit history size to 50 entries
+    if (newHistoryStack.length > 50) {
+      newHistoryStack.shift();
+    }
+    
+    set({ 
+      historyStack: newHistoryStack,
+      historyIndex: newHistoryStack.length - 1
+    });
+  },
+
+  undo: () => {
+    const { historyStack, historyIndex } = get();
+    
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      const { nodes, edges } = historyStack[newIndex];
+      
+      set({
+        nodes,
+        edges,
+        historyIndex: newIndex
+      });
+    }
+  },
+
+  redo: () => {
+    const { historyStack, historyIndex } = get();
+    
+    if (historyIndex < historyStack.length - 1) {
+      const newIndex = historyIndex + 1;
+      const { nodes, edges } = historyStack[newIndex];
+      
+      set({
+        nodes,
+        edges,
+        historyIndex: newIndex
+      });
+    }
   },
 };
     },

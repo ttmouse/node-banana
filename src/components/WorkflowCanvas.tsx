@@ -116,7 +116,9 @@ function WorkflowCanvasInner() {
     getNodeById, 
     addToGlobalHistory,
     spaceBarPressed,
-    setSpaceBarPressed
+    setSpaceBarPressed,
+    undo,
+    redo
   } = useWorkflowStore();
   const { screenToFlowPosition } = useReactFlow();
   const [isDragOver, setIsDragOver] = useState(false);
@@ -126,12 +128,47 @@ function WorkflowCanvasInner() {
   const [gridSelector, setGridSelector] = useState<{ position: { x: number; y: number }; sourceNodeId: string; flowPosition: { x: number; y: number } } | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   
-  // Handle space bar press for canvas panning
+  // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Space bar for canvas panning
       if (event.code === 'Space' && !event.repeat) {
         event.preventDefault();
         setSpaceBarPressed(true);
+      }
+      
+      // Zoom shortcuts
+      if ((event.metaKey || event.ctrlKey)) {
+        switch (event.key) {
+          case '0':
+            event.preventDefault();
+            fitView({ duration: 300 });
+            break;
+          case '1':
+            event.preventDefault();
+            setViewport({ zoom: 1 }, { duration: 300 });
+            break;
+          case '=':
+          case '+':
+            event.preventDefault();
+            zoomIn({ duration: 200 });
+            break;
+          case '-':
+          case '_':
+            event.preventDefault();
+            zoomOut({ duration: 200 });
+            break;
+          case 'z':
+            event.preventDefault();
+            if (event.shiftKey) {
+              // Redo (Ctrl+Shift+Z or Cmd+Shift+Z)
+              redo();
+            } else {
+              // Undo (Ctrl+Z or Cmd+Z)
+              undo();
+            }
+            break;
+        }
       }
     };
     
