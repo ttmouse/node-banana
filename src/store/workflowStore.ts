@@ -52,9 +52,11 @@ interface WorkflowStore {
   edges: WorkflowEdge[];
   edgeStyle: EdgeStyle;
   clipboard: ClipboardData | null;
+  spaceBarPressed: boolean;
 
   // Settings
   setEdgeStyle: (style: EdgeStyle) => void;
+  setSpaceBarPressed: (pressed: boolean) => void;
 
   // Node operations
   addNode: (type: NodeType, position: XYPosition) => string;
@@ -269,6 +271,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
   edges: [],
   edgeStyle: "curved" as EdgeStyle,
   clipboard: null,
+  spaceBarPressed: false,
   isRunning: false,
   currentNodeId: null,
   pausedAtNodeId: null,
@@ -276,6 +279,10 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
   setEdgeStyle: (style: EdgeStyle) => {
     set({ edgeStyle: style });
+  },
+
+  setSpaceBarPressed: (pressed: boolean) => {
+    set({ spaceBarPressed: pressed });
   },
 
   addNode: (type: NodeType, position: XYPosition) => {

@@ -31,6 +31,7 @@ export function BaseNode({
   const currentNodeId = useWorkflowStore((state) => state.currentNodeId);
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const executeWorkflow = useWorkflowStore((state) => state.executeWorkflow);
+  const spaceBarPressed = useWorkflowStore((state) => state.spaceBarPressed);
   const isCurrentlyExecuting = currentNodeId === id;
   const { getNodes, setNodes } = useReactFlow();
 
@@ -92,6 +93,7 @@ export function BaseNode({
           ${selected ? "border-amber-400 ring-1 ring-amber-300/40" : ""}
           ${className}
         `}
+        style={{ cursor: spaceBarPressed ? 'grab' : 'default' }}
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >

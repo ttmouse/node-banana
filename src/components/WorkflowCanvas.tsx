@@ -104,15 +104,26 @@ interface ConnectionDropState {
 }
 
 function WorkflowCanvasInner() {
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory } =
-    useWorkflowStore();
+  const { 
+    nodes, 
+    edges, 
+    onNodesChange, 
+    onEdgesChange, 
+    onConnect, 
+    addNode, 
+    updateNodeData, 
+    loadWorkflow, 
+    getNodeById, 
+    addToGlobalHistory,
+    spaceBarPressed,
+    setSpaceBarPressed
+  } = useWorkflowStore();
   const { screenToFlowPosition } = useReactFlow();
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropType, setDropType] = useState<"image" | "workflow" | "node" | null>(null);
   const [connectionDrop, setConnectionDrop] = useState<ConnectionDropState | null>(null);
   const [isSplitting, setIsSplitting] = useState(false);
   const [gridSelector, setGridSelector] = useState<{ position: { x: number; y: number }; sourceNodeId: string; flowPosition: { x: number; y: number } } | null>(null);
-  const [spaceBarPressed, setSpaceBarPressed] = useState(false);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   
   // Handle space bar press for canvas panning
@@ -156,7 +167,7 @@ function WorkflowCanvasInner() {
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
     };
-  }, [spaceBarPressed]);
+  }, [spaceBarPressed, setSpaceBarPressed]);
   
   const handlePaneContextMenu = useCallback((event: ReactMouseEvent) => {
     event.preventDefault();
