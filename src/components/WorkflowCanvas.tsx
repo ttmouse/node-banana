@@ -121,7 +121,7 @@ function WorkflowCanvasInner() {
     undo,
     redo
   } = useWorkflowStore();
-  const { screenToFlowPosition, getViewport } = useReactFlow();
+  const { screenToFlowPosition, getViewport, setViewport, fitView, zoomIn, zoomOut } = useReactFlow();
   const [currentZoom, setCurrentZoom] = useState(getViewport().zoom);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropType, setDropType] = useState<"image" | "workflow" | "node" | null>(null);
@@ -147,16 +147,18 @@ function WorkflowCanvasInner() {
             fitView({ duration: 300 });
             break;
           case '1':
+          case 'İ': // Handle ⇧ + 1 on some keyboards
             event.preventDefault();
             setViewport({ zoom: 1 }, { duration: 300 });
             break;
           case '=':
           case '+':
+          case '˝': // Handle ⇧ + = on some keyboards
             event.preventDefault();
             zoomIn({ duration: 200 });
             break;
           case '-':
-          case '_':
+          case '˜': // Handle ⇧ + - on some keyboards
             event.preventDefault();
             zoomOut({ duration: 200 });
             break;
