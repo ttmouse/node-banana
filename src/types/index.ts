@@ -7,6 +7,7 @@ export type NodeType =
   | "prompt"
   | "nanoBanana"
   | "llmGenerate"
+  | "splitGrid"
   | "output";
 
 // Aspect Ratios (supported by both Nano Banana and Nano Banana Pro)
@@ -113,7 +114,7 @@ export interface ImageHistoryItem {
   image: string;          // Base64 data URL
   timestamp: number;      // For display & sorting
   prompt: string;         // The prompt used
-  aspectRatio: AspectRatio;
+  aspectRatio: AspectRatioOption;
   model: ModelType;
 }
 
@@ -142,6 +143,25 @@ export interface LLMGenerateNodeData extends BaseNodeData {
   error: string | null;
 }
 
+// Split Grid Node Data
+export interface SplitGridNodeData extends BaseNodeData {
+  sourceImage: string | null;
+  targetCount: number;
+  defaultPrompt: string;
+  generateSettings: {
+    aspectRatio: AspectRatioOption;
+    resolution: Resolution;
+    model: ModelType;
+    useGoogleSearch: boolean;
+  };
+  childNodeIds: { imageInput: string; nanoBanana: string; prompt: string }[];
+  gridRows: number;
+  gridCols: number;
+  isConfigured: boolean;
+  status: NodeStatus;
+  error: string | null;
+}
+
 // Output Node Data
 export interface OutputNodeData extends BaseNodeData {
   image: string | null;
@@ -154,10 +174,13 @@ export type WorkflowNodeData =
   | PromptNodeData
   | NanoBananaNodeData
   | LLMGenerateNodeData
+  | SplitGridNodeData
   | OutputNodeData;
 
 // Workflow Node with typed data
-export type WorkflowNode = Node<WorkflowNodeData, NodeType>;
+export type WorkflowNode = Node<WorkflowNodeData, NodeType> & {
+  groupId?: string;
+};
 
 // Workflow Edge Data
 export interface WorkflowEdgeData extends Record<string, unknown> {
@@ -211,4 +234,24 @@ export interface ToolOptions {
   fillColor: string | null;
   fontSize: number;
   opacity: number;
+}
+
+// Group Types
+export type GroupColor = "neutral" | "blue" | "green" | "purple" | "orange" | "red";
+
+export interface NodeGroup {
+  id: string;
+  name: string;
+  color: GroupColor;
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+}
+
+// Workflow Save Config (for auto-save)
+export interface WorkflowSaveConfig {
+  workflowId: string;
+  name: string;
+  directoryPath: string;
+  generationsPath: string | null;
+  lastSavedAt: number;
 }

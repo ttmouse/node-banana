@@ -1,11 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import {
-  saveNodeImageData,
-  deleteNodeImageData,
-  loadAllNodeImageData,
-  clearAllNodeImageData,
-} from "@/utils/imageCache";
 import {
   Connection,
   EdgeChange,
@@ -24,9 +17,13 @@ import {
   PromptNodeData,
   NanoBananaNodeData,
   LLMGenerateNodeData,
+  SplitGridNodeData,
   OutputNodeData,
   WorkflowNodeData,
   ImageHistoryItem,
+  WorkflowSaveConfig,
+  NodeGroup,
+  GroupColor,
 } from "@/types";
 import { useToast } from "@/components/Toast";
 
@@ -35,10 +32,12 @@ export type EdgeStyle = "angular" | "curved";
 // Workflow file format
 export interface WorkflowFile {
   version: 1;
+  id?: string;  // Optional for backward compatibility with old/shared workflows
   name: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   edgeStyle: EdgeStyle;
+  groups?: Record<string, NodeGroup>;  // Optional for backward compatibility
 }
 
 // Clipboard data structure for copy/paste
@@ -52,11 +51,10 @@ interface WorkflowStore {
   edges: WorkflowEdge[];
   edgeStyle: EdgeStyle;
   clipboard: ClipboardData | null;
-  spaceBarPressed: boolean;
+  groups: Record<string, NodeGroup>;
 
   // Settings
   setEdgeStyle: (style: EdgeStyle) => void;
-  setSpaceBarPressed: (pressed: boolean) => void;
 
   // Node operations
   addNode: (type: NodeType, position: XYPosition) => string;
@@ -67,12 +65,23 @@ interface WorkflowStore {
   // Edge operations
   onEdgesChange: (changes: EdgeChange<WorkflowEdge>[]) => void;
   onConnect: (connection: Connection) => void;
+  addEdgeWithType: (connection: Connection, edgeType: string) => void;
   removeEdge: (edgeId: string) => void;
   toggleEdgePause: (edgeId: string) => void;
 
   // Copy/Paste operations
   copySelectedNodes: () => void;
   pasteNodes: (offset?: XYPosition) => void;
+  clearClipboard: () => void;
+
+  // Group operations
+  createGroup: (nodeIds: string[]) => string;
+  deleteGroup: (groupId: string) => void;
+  addNodesToGroup: (nodeIds: string[], groupId: string) => void;
+  removeNodesFromGroup: (nodeIds: string[]) => void;
+  updateGroup: (groupId: string, updates: Partial<NodeGroup>) => void;
+  moveGroupNodes: (groupId: string, delta: { x: number; y: number }) => void;
+  setNodeGroupId: (nodeId: string, groupId: string | undefined) => void;
 
   // Execution
   isRunning: boolean;
@@ -96,62 +105,27 @@ interface WorkflowStore {
   globalImageHistory: ImageHistoryItem[];
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => void;
   clearGlobalHistory: () => void;
-  
-  // Undo/Redo
-  historyStack: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }[];
-  historyIndex: number;
-  undo: () => void;
-  redo: () => void;
-  saveToHistory: () => void;
+
+  // Auto-save state
+  workflowId: string | null;
+  workflowName: string | null;
+  saveDirectoryPath: string | null;
+  generationsPath: string | null;
+  lastSavedAt: number | null;
+  hasUnsavedChanges: boolean;
+  autoSaveEnabled: boolean;
+  isSaving: boolean;
+
+  // Auto-save actions
+  setWorkflowMetadata: (id: string, name: string, path: string, generationsPath: string | null) => void;
+  setWorkflowName: (name: string) => void;
+  setGenerationsPath: (path: string | null) => void;
+  setAutoSaveEnabled: (enabled: boolean) => void;
+  markAsUnsaved: () => void;
+  saveToFile: () => Promise<boolean>;
+  initializeAutoSave: () => void;
+  cleanupAutoSave: () => void;
 }
-
-type WorkflowStoreSetter = (
-  partial:
-    | WorkflowStore
-    | Partial<WorkflowStore>
-    | ((state: WorkflowStore) => WorkflowStore | Partial<WorkflowStore>),
-  replace?: boolean
-) => void;
-
-let workflowStoreSetter: WorkflowStoreSetter | null = null;
-let workflowStoreGetter: (() => WorkflowStore) | null = null;
-
-const extractNodeImagePayload = (node: WorkflowNode): Partial<WorkflowNodeData> | null => {
-  switch (node.type) {
-    case "imageInput": {
-      const data = node.data as ImageInputNodeData;
-      if (!data.image) return null;
-      return {
-        image: data.image,
-        filename: data.filename,
-        dimensions: data.dimensions,
-      };
-    }
-    case "annotation": {
-      const data = node.data as AnnotationNodeData;
-      const payload: Partial<AnnotationNodeData> = {};
-      if (data.sourceImage) payload.sourceImage = data.sourceImage;
-      if (data.outputImage) payload.outputImage = data.outputImage;
-      return Object.keys(payload).length ? payload : null;
-    }
-    case "nanoBanana": {
-      const data = node.data as NanoBananaNodeData;
-      const payload: Partial<NanoBananaNodeData> = {};
-      if (data.inputImages.length > 0) payload.inputImages = data.inputImages;
-      if (data.outputImage) payload.outputImage = data.outputImage;
-      return Object.keys(payload).length ? payload : null;
-    }
-    case "output": {
-      const data = node.data as OutputNodeData;
-      if (!data.image) return null;
-      return { image: data.image };
-    }
-    default:
-      return null;
-  }
-};
-
-let restoreNodeImagesFromCache: (() => void) | null = null;
 
 const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
   switch (type) {
@@ -176,7 +150,7 @@ const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
         inputImages: [],
         inputPrompt: null,
         outputImage: null,
-        aspectRatio: "original",
+        aspectRatio: "1:1",
         resolution: "1K",
         model: "nano-banana-pro",
         useGoogleSearch: false,
@@ -190,10 +164,28 @@ const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
         provider: "google",
         model: "gemini-2.5-flash",
         temperature: 0.7,
-        maxTokens: 1024,
+        maxTokens: 8192,
         status: "idle",
         error: null,
       } as LLMGenerateNodeData;
+    case "splitGrid":
+      return {
+        sourceImage: null,
+        targetCount: 6,
+        defaultPrompt: "",
+        generateSettings: {
+          aspectRatio: "1:1",
+          resolution: "1K",
+          model: "nano-banana-pro",
+          useGoogleSearch: false,
+        },
+        childNodeIds: [],
+        gridRows: 2,
+        gridCols: 3,
+        isConfigured: false,
+        status: "idle",
+        error: null,
+      } as SplitGridNodeData;
     case "output":
       return {
         image: null,
@@ -202,101 +194,71 @@ const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
 };
 
 let nodeIdCounter = 0;
+let groupIdCounter = 0;
+let autoSaveIntervalId: ReturnType<typeof setInterval> | null = null;
 
-const NODE_ID_SUFFIX_REGEX = /-(\d+)$/;
-
-const findMaxNodeSuffix = (nodes: WorkflowNode[]): number => {
-  return nodes.reduce((max, node) => {
-    const match = node.id.match(NODE_ID_SUFFIX_REGEX);
-    if (!match) return max;
-    const value = parseInt(match[1], 10);
-    if (Number.isNaN(value)) return max;
-    return Math.max(max, value);
-  }, 0);
+// Group color palette (dark mode tints)
+export const GROUP_COLORS: Record<GroupColor, string> = {
+  neutral: "#262626",
+  blue: "#1e3a5f",
+  green: "#1a3d2e",
+  purple: "#2d2458",
+  orange: "#3d2a1a",
+  red: "#3d1a1a",
 };
 
-const syncNodeIdCounter = (nodes: WorkflowNode[]) => {
-  nodeIdCounter = Math.max(nodeIdCounter, findMaxNodeSuffix(nodes));
+const GROUP_COLOR_ORDER: GroupColor[] = [
+  "neutral", "blue", "green", "purple", "orange", "red"
+];
+
+// localStorage helpers for auto-save configs
+const STORAGE_KEY = "node-banana-workflow-configs";
+
+const generateWorkflowId = () =>
+  `wf_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+const loadSaveConfigs = (): Record<string, WorkflowSaveConfig> => {
+  if (typeof window === "undefined") return {};
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored ? JSON.parse(stored) : {};
 };
 
-const generateUniqueNodeId = (type: NodeType, nodes: WorkflowNode[]): string => {
-  const maxSuffix = findMaxNodeSuffix(nodes);
-  const startingSuffix = Math.max(nodeIdCounter + 1, maxSuffix + 1, 1);
-  nodeIdCounter = startingSuffix;
-  return `${type}-${startingSuffix}`;
+const saveSaveConfig = (config: WorkflowSaveConfig) => {
+  if (typeof window === "undefined") return;
+  const configs = loadSaveConfigs();
+  configs[config.workflowId] = config;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
 };
 
-const deduplicateWorkflowNodes = (nodes: WorkflowNode[]) => {
-  const seen = new Set<string>();
-  const deduped: WorkflowNode[] = [];
-  const removedIds: string[] = [];
+export { generateWorkflowId };
 
-  nodes.forEach((node) => {
-    if (seen.has(node.id)) {
-      removedIds.push(node.id);
-      return;
-    }
-    seen.add(node.id);
-    deduped.push(node);
-  });
-
-  return {
-    nodes: deduped,
-    removedIds: Array.from(new Set(removedIds)),
-  };
-};
-
-export const useWorkflowStore = create<WorkflowStore>()(
-  persist(
-    (set, get) => {
-      workflowStoreSetter = set;
-      workflowStoreGetter = get;
-      restoreNodeImagesFromCache = () => {
-        if (typeof window === "undefined") return;
-        const nodes = get().nodes;
-        if (!nodes.length) return;
-
-        loadAllNodeImageData(nodes.map((n) => n.id)).then((dataMap) => {
-          if (!Object.keys(dataMap).length) return;
-          set((state) => ({
-            nodes: state.nodes.map((node) => {
-              const payload = dataMap[node.id];
-              if (!payload) return node;
-              return {
-                ...node,
-                data: { ...node.data, ...payload.data } as WorkflowNodeData,
-              };
-            }),
-          }));
-        }).catch((error) => {
-          console.error("[workflowStore] Failed to restore node images", error);
-        });
-      };
-
-      return {
+export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   nodes: [],
   edges: [],
   edgeStyle: "curved" as EdgeStyle,
   clipboard: null,
-  spaceBarPressed: false,
+  groups: {},
   isRunning: false,
   currentNodeId: null,
   pausedAtNodeId: null,
   globalImageHistory: [],
-  historyStack: [{ nodes: [], edges: [] }],
-  historyIndex: 0,
+
+  // Auto-save initial state
+  workflowId: null,
+  workflowName: null,
+  saveDirectoryPath: null,
+  generationsPath: null,
+  lastSavedAt: null,
+  hasUnsavedChanges: false,
+  autoSaveEnabled: true,
+  isSaving: false,
 
   setEdgeStyle: (style: EdgeStyle) => {
     set({ edgeStyle: style });
   },
 
-  setSpaceBarPressed: (pressed: boolean) => {
-    set({ spaceBarPressed: pressed });
-  },
-
   addNode: (type: NodeType, position: XYPosition) => {
-    const existingNodes = get().nodes;
-    const id = generateUniqueNodeId(type, existingNodes);
+    const id = `${type}-${++nodeIdCounter}`;
 
     // Default dimensions based on node type
     const defaultDimensions: Record<NodeType, { width: number; height: number }> = {
@@ -305,6 +267,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
       prompt: { width: 320, height: 220 },
       nanoBanana: { width: 300, height: 300 },
       llmGenerate: { width: 320, height: 360 },
+      splitGrid: { width: 300, height: 320 },
       output: { width: 320, height: 320 },
     };
 
@@ -320,6 +283,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
     set((state) => ({
       nodes: [...state.nodes, newNode],
+      hasUnsavedChanges: true,
     }));
 
     return id;
@@ -332,18 +296,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
           ? { ...node, data: { ...node.data, ...data } as WorkflowNodeData }
           : node
       ) as WorkflowNode[],
+      hasUnsavedChanges: true,
     }));
-    if (typeof window !== "undefined") {
-      const node = get().nodes.find((n) => n.id === nodeId);
-      if (node) {
-        const payload = extractNodeImagePayload(node);
-        if (payload) {
-          saveNodeImageData(nodeId, { type: node.type, data: payload });
-        } else {
-          deleteNodeImageData(nodeId);
-        }
-      }
-    }
   },
 
   removeNode: (nodeId: string) => {
@@ -352,62 +306,61 @@ export const useWorkflowStore = create<WorkflowStore>()(
       edges: state.edges.filter(
         (edge) => edge.source !== nodeId && edge.target !== nodeId
       ),
+      hasUnsavedChanges: true,
     }));
-    if (typeof window !== "undefined") {
-      deleteNodeImageData(nodeId);
-    }
   },
 
   onNodesChange: (changes: NodeChange<WorkflowNode>[]) => {
-    set((state) => {
-      const newNodes = applyNodeChanges(changes, state.nodes);
-      // Only save to history if this is not a selection change
-      const hasNonSelectionChange = changes.some(change => change.type !== 'select');
-      if (hasNonSelectionChange) {
-        // Use setTimeout to ensure state is updated before saving to history
-        setTimeout(() => get().saveToHistory(), 0);
-      }
-      return {
-        nodes: newNodes,
-      };
-    });
+    // Only mark as unsaved for meaningful changes (not selection changes)
+    const hasMeaningfulChange = changes.some(
+      (c) => c.type !== "select" && c.type !== "dimensions"
+    );
+    set((state) => ({
+      nodes: applyNodeChanges(changes, state.nodes),
+      ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
+    }));
   },
 
   onEdgesChange: (changes: EdgeChange<WorkflowEdge>[]) => {
-    set((state) => {
-      const newEdges = applyEdgeChanges(changes, state.edges);
-      // Only save to history if this is not a selection change
-      const hasNonSelectionChange = changes.some(change => change.type !== 'select');
-      if (hasNonSelectionChange) {
-        // Use setTimeout to ensure state is updated before saving to history
-        setTimeout(() => get().saveToHistory(), 0);
-      }
-      return {
-        edges: newEdges,
-      };
-    });
+    // Only mark as unsaved for meaningful changes (not selection changes)
+    const hasMeaningfulChange = changes.some((c) => c.type !== "select");
+    set((state) => ({
+      edges: applyEdgeChanges(changes, state.edges),
+      ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
+    }));
   },
 
   onConnect: (connection: Connection) => {
-    set((state) => {
-      const newEdges = addEdge(
+    set((state) => ({
+      edges: addEdge(
         {
           ...connection,
           id: `edge-${connection.source}-${connection.target}-${connection.sourceHandle || "default"}-${connection.targetHandle || "default"}`,
         },
         state.edges
-      );
-      // Save to history after connection is made
-      setTimeout(() => get().saveToHistory(), 0);
-      return {
-        edges: newEdges,
-      };
-    });
+      ),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  addEdgeWithType: (connection: Connection, edgeType: string) => {
+    set((state) => ({
+      edges: addEdge(
+        {
+          ...connection,
+          id: `edge-${connection.source}-${connection.target}-${connection.sourceHandle || "default"}-${connection.targetHandle || "default"}`,
+          type: edgeType,
+        },
+        state.edges
+      ),
+      hasUnsavedChanges: true,
+    }));
   },
 
   removeEdge: (edgeId: string) => {
     set((state) => ({
       edges: state.edges.filter((edge) => edge.id !== edgeId),
+      hasUnsavedChanges: true,
     }));
   },
 
@@ -418,6 +371,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
           ? { ...edge, data: { ...edge.data, hasPause: !edge.data?.hasPause } }
           : edge
       ),
+      hasUnsavedChanges: true,
     }));
   },
 
@@ -484,7 +438,159 @@ export const useWorkflowStore = create<WorkflowStore>()(
     set({
       nodes: [...updatedNodes, ...newNodes] as WorkflowNode[],
       edges: [...edges, ...newEdges],
+      hasUnsavedChanges: true,
     });
+  },
+
+  clearClipboard: () => {
+    set({ clipboard: null });
+  },
+
+  // Group operations
+  createGroup: (nodeIds: string[]) => {
+    const { nodes, groups } = get();
+
+    if (nodeIds.length === 0) return "";
+
+    // Get the nodes to group
+    const nodesToGroup = nodes.filter((n) => nodeIds.includes(n.id));
+    if (nodesToGroup.length === 0) return "";
+
+    // Default dimensions per node type
+    const defaultNodeDimensions: Record<string, { width: number; height: number }> = {
+      imageInput: { width: 300, height: 280 },
+      annotation: { width: 300, height: 280 },
+      prompt: { width: 320, height: 220 },
+      nanoBanana: { width: 300, height: 300 },
+      llmGenerate: { width: 320, height: 360 },
+      splitGrid: { width: 300, height: 320 },
+      output: { width: 320, height: 320 },
+    };
+
+    // Calculate bounding box of selected nodes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    nodesToGroup.forEach((node) => {
+      // Use measured dimensions (actual rendered size) first, then style, then type-specific defaults
+      const defaults = defaultNodeDimensions[node.type] || { width: 300, height: 280 };
+      const width = node.measured?.width || (node.style?.width as number) || defaults.width;
+      const height = node.measured?.height || (node.style?.height as number) || defaults.height;
+
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + width);
+      maxY = Math.max(maxY, node.position.y + height);
+    });
+
+    // Add padding around nodes
+    const padding = 20;
+    const headerHeight = 32; // Match HEADER_HEIGHT in GroupsOverlay
+
+    // Find next available color
+    const usedColors = new Set(Object.values(groups).map((g) => g.color));
+    let color: GroupColor = "neutral";
+    for (const c of GROUP_COLOR_ORDER) {
+      if (!usedColors.has(c)) {
+        color = c;
+        break;
+      }
+    }
+
+    // Generate ID and name
+    const id = `group-${++groupIdCounter}`;
+    const groupNumber = Object.keys(groups).length + 1;
+    const name = `Group ${groupNumber}`;
+
+    const newGroup: NodeGroup = {
+      id,
+      name,
+      color,
+      position: {
+        x: minX - padding,
+        y: minY - padding - headerHeight
+      },
+      size: {
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2 + headerHeight,
+      },
+    };
+
+    // Update nodes with groupId and add group
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        nodeIds.includes(node.id) ? { ...node, groupId: id } : node
+      ) as WorkflowNode[],
+      groups: { ...state.groups, [id]: newGroup },
+      hasUnsavedChanges: true,
+    }));
+
+    return id;
+  },
+
+  deleteGroup: (groupId: string) => {
+    set((state) => {
+      const { [groupId]: _, ...remainingGroups } = state.groups;
+      return {
+        nodes: state.nodes.map((node) =>
+          node.groupId === groupId ? { ...node, groupId: undefined } : node
+        ) as WorkflowNode[],
+        groups: remainingGroups,
+        hasUnsavedChanges: true,
+      };
+    });
+  },
+
+  addNodesToGroup: (nodeIds: string[], groupId: string) => {
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        nodeIds.includes(node.id) ? { ...node, groupId } : node
+      ) as WorkflowNode[],
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  removeNodesFromGroup: (nodeIds: string[]) => {
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        nodeIds.includes(node.id) ? { ...node, groupId: undefined } : node
+      ) as WorkflowNode[],
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  updateGroup: (groupId: string, updates: Partial<NodeGroup>) => {
+    set((state) => ({
+      groups: {
+        ...state.groups,
+        [groupId]: { ...state.groups[groupId], ...updates },
+      },
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  moveGroupNodes: (groupId: string, delta: { x: number; y: number }) => {
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        node.groupId === groupId
+          ? {
+              ...node,
+              position: {
+                x: node.position.x + delta.x,
+                y: node.position.y + delta.y,
+              },
+            }
+          : node
+      ) as WorkflowNode[],
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  setNodeGroupId: (nodeId: string, groupId: string | undefined) => {
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        node.id === nodeId ? { ...node, groupId } : node
+      ) as WorkflowNode[],
+      hasUnsavedChanges: true,
+    }));
   },
 
   getNodeById: (id: string) => {
@@ -544,11 +650,16 @@ export const useWorkflowStore = create<WorkflowStore>()(
     nodes
       .filter((n) => n.type === "nanoBanana")
       .forEach((node) => {
+        const imageConnected = edges.some(
+          (e) => e.target === node.id && e.targetHandle === "image"
+        );
         const textConnected = edges.some(
           (e) => e.target === node.id && e.targetHandle === "text"
         );
 
-        // Only text input is required, image is optional
+        if (!imageConnected) {
+          errors.push(`Generate node "${node.id}" missing image input`);
+        }
         if (!textConnected) {
           errors.push(`Generate node "${node.id}" missing text input`);
         }
@@ -671,11 +782,10 @@ export const useWorkflowStore = create<WorkflowStore>()(
           case "nanoBanana": {
             const { images, text } = getConnectedInputs(node.id);
 
-            // Only text is required, images are optional
-            if (!text) {
+            if (images.length === 0 || !text) {
               updateNodeData(node.id, {
                 status: "error",
-                error: "Missing text input",
+                error: "Missing image or text input",
               });
               set({ isRunning: false, currentNodeId: null });
               return;
@@ -691,12 +801,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
             try {
               const nodeData = node.data as NanoBananaNodeData;
 
-              const shouldMatchOriginal = nodeData.aspectRatio === "original" && images.length > 0;
               const requestPayload = {
                 images,
                 prompt: text,
-                aspectRatio: shouldMatchOriginal ? undefined : nodeData.aspectRatio,
-                resolution: shouldMatchOriginal ? undefined : nodeData.resolution,
+                aspectRatio: nodeData.aspectRatio,
+                resolution: nodeData.resolution,
                 model: nodeData.model,
                 useGoogleSearch: nodeData.useGoogleSearch,
               };
@@ -743,6 +852,22 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   status: "complete",
                   error: null,
                 });
+
+                // Auto-save to generations folder if configured
+                const genPath = get().generationsPath;
+                if (genPath) {
+                  fetch("/api/save-generation", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      directoryPath: genPath,
+                      image: result.image,
+                      prompt: text,
+                    }),
+                  }).catch((err) => {
+                    console.error("Failed to save generation:", err);
+                  });
+                }
               } else {
                 updateNodeData(node.id, {
                   status: "error",
@@ -849,6 +974,78 @@ export const useWorkflowStore = create<WorkflowStore>()(
             break;
           }
 
+          case "splitGrid": {
+            const { images } = getConnectedInputs(node.id);
+            const sourceImage = images[0] || null;
+
+            if (!sourceImage) {
+              updateNodeData(node.id, {
+                status: "error",
+                error: "No input image connected",
+              });
+              set({ isRunning: false, currentNodeId: null });
+              return;
+            }
+
+            const nodeData = node.data as SplitGridNodeData;
+
+            if (!nodeData.isConfigured) {
+              updateNodeData(node.id, {
+                status: "error",
+                error: "Node not configured - open settings first",
+              });
+              set({ isRunning: false, currentNodeId: null });
+              return;
+            }
+
+            updateNodeData(node.id, {
+              sourceImage,
+              status: "loading",
+              error: null,
+            });
+
+            try {
+              // Import and use the grid splitter
+              const { splitWithDimensions } = await import("@/utils/gridSplitter");
+              const { images: splitImages } = await splitWithDimensions(
+                sourceImage,
+                nodeData.gridRows,
+                nodeData.gridCols
+              );
+
+              // Populate child imageInput nodes with split images
+              for (let index = 0; index < nodeData.childNodeIds.length; index++) {
+                const childSet = nodeData.childNodeIds[index];
+                if (splitImages[index]) {
+                  // Create a promise to get image dimensions
+                  await new Promise<void>((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                      updateNodeData(childSet.imageInput, {
+                        image: splitImages[index],
+                        filename: `split-${Math.floor(index / nodeData.gridCols) + 1}-${(index % nodeData.gridCols) + 1}.png`,
+                        dimensions: { width: img.width, height: img.height },
+                      });
+                      resolve();
+                    };
+                    img.onerror = () => resolve();
+                    img.src = splitImages[index];
+                  });
+                }
+              }
+
+              updateNodeData(node.id, { status: "complete", error: null });
+            } catch (error) {
+              updateNodeData(node.id, {
+                status: "error",
+                error: error instanceof Error ? error.message : "Failed to split image",
+              });
+              set({ isRunning: false, currentNodeId: null });
+              return;
+            }
+            break;
+          }
+
           case "output": {
             const { images } = getConnectedInputs(node.id);
             const image = images[0] || null;
@@ -893,11 +1090,10 @@ export const useWorkflowStore = create<WorkflowStore>()(
         let images = inputs.images.length > 0 ? inputs.images : nodeData.inputImages;
         let text = inputs.text ?? nodeData.inputPrompt;
 
-        // Only text is required, images are optional
-        if (!text) {
+        if (!images || images.length === 0 || !text) {
           updateNodeData(nodeId, {
             status: "error",
-            error: "Missing text input",
+            error: "Missing image or text input",
           });
           set({ isRunning: false, currentNodeId: null });
           return;
@@ -908,15 +1104,14 @@ export const useWorkflowStore = create<WorkflowStore>()(
           error: null,
         });
 
-        const shouldMatchOriginal = nodeData.aspectRatio === "original" && images.length > 0;
         const response = await fetch("/api/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             images,
             prompt: text,
-            aspectRatio: shouldMatchOriginal ? undefined : nodeData.aspectRatio,
-            resolution: shouldMatchOriginal ? undefined : nodeData.resolution,
+            aspectRatio: nodeData.aspectRatio,
+            resolution: nodeData.resolution,
             model: nodeData.model,
             useGoogleSearch: nodeData.useGoogleSearch,
           }),
@@ -951,6 +1146,22 @@ export const useWorkflowStore = create<WorkflowStore>()(
             status: "complete",
             error: null,
           });
+
+          // Auto-save to generations folder if configured
+          const genPath = get().generationsPath;
+          if (genPath) {
+            fetch("/api/save-generation", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                directoryPath: genPath,
+                image: result.image,
+                prompt: text,
+              }),
+            }).catch((err) => {
+              console.error("Failed to save generation:", err);
+            });
+          }
         } else {
           updateNodeData(nodeId, {
             status: "error",
@@ -1017,6 +1228,65 @@ export const useWorkflowStore = create<WorkflowStore>()(
             error: result.error || "LLM generation failed",
           });
         }
+      } else if (node.type === "splitGrid") {
+        const { images } = getConnectedInputs(node.id);
+        const sourceImage = images[0] || null;
+
+        if (!sourceImage) {
+          updateNodeData(node.id, {
+            status: "error",
+            error: "No input image connected",
+          });
+          set({ isRunning: false, currentNodeId: null });
+          return;
+        }
+
+        const nodeData = node.data as SplitGridNodeData;
+
+        if (!nodeData.isConfigured) {
+          updateNodeData(node.id, {
+            status: "error",
+            error: "Node not configured - open settings first",
+          });
+          set({ isRunning: false, currentNodeId: null });
+          return;
+        }
+
+        updateNodeData(node.id, {
+          sourceImage,
+          status: "loading",
+          error: null,
+        });
+
+        const { splitWithDimensions } = await import("@/utils/gridSplitter");
+        const { images: splitImages } = await splitWithDimensions(
+          sourceImage,
+          nodeData.gridRows,
+          nodeData.gridCols
+        );
+
+        // Populate child imageInput nodes with split images
+        for (let index = 0; index < nodeData.childNodeIds.length; index++) {
+          const childSet = nodeData.childNodeIds[index];
+          if (splitImages[index]) {
+            // Create a promise to get image dimensions
+            await new Promise<void>((resolve) => {
+              const img = new Image();
+              img.onload = () => {
+                updateNodeData(childSet.imageInput, {
+                  image: splitImages[index],
+                  filename: `split-${Math.floor(index / nodeData.gridCols) + 1}-${(index % nodeData.gridCols) + 1}.png`,
+                  dimensions: { width: img.width, height: img.height },
+                });
+                resolve();
+              };
+              img.onerror = () => resolve();
+              img.src = splitImages[index];
+            });
+          }
+        }
+
+        updateNodeData(node.id, { status: "complete", error: null });
       }
 
       set({ isRunning: false, currentNodeId: null });
@@ -1030,7 +1300,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
   },
 
   saveWorkflow: (name?: string) => {
-    const { nodes, edges, edgeStyle } = get();
+    const { nodes, edges, edgeStyle, groups } = get();
 
     const workflow: WorkflowFile = {
       version: 1,
@@ -1038,6 +1308,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
       nodes,
       edges,
       edgeStyle,
+      groups: Object.keys(groups).length > 0 ? groups : undefined,
     };
 
     const json = JSON.stringify(workflow, null, 2);
@@ -1054,45 +1325,62 @@ export const useWorkflowStore = create<WorkflowStore>()(
   },
 
   loadWorkflow: (workflow: WorkflowFile) => {
-    const { nodes: dedupedNodes, removedIds } = deduplicateWorkflowNodes(workflow.nodes);
-    if (removedIds.length) {
-      console.warn(
-        `[workflowStore] Removed duplicate node ids while loading workflow: ${removedIds.join(", ")}`
-      );
-    }
+    // Update nodeIdCounter to avoid ID collisions
+    const maxNodeId = workflow.nodes.reduce((max, node) => {
+      const match = node.id.match(/-(\d+)$/);
+      if (match) {
+        return Math.max(max, parseInt(match[1], 10));
+      }
+      return max;
+    }, 0);
+    nodeIdCounter = maxNodeId;
+
+    // Update groupIdCounter to avoid ID collisions
+    const maxGroupId = Object.keys(workflow.groups || {}).reduce((max, id) => {
+      const match = id.match(/-(\d+)$/);
+      if (match) {
+        return Math.max(max, parseInt(match[1], 10));
+      }
+      return max;
+    }, 0);
+    groupIdCounter = maxGroupId;
+
+    // Look up saved config from localStorage (only if workflow has an ID)
+    const configs = loadSaveConfigs();
+    const savedConfig = workflow.id ? configs[workflow.id] : null;
 
     set({
-      nodes: dedupedNodes,
+      nodes: workflow.nodes,
       edges: workflow.edges,
       edgeStyle: workflow.edgeStyle || "angular",
+      groups: workflow.groups || {},
       isRunning: false,
       currentNodeId: null,
+      // Restore workflow ID and paths from localStorage if available
+      workflowId: workflow.id || null,
+      workflowName: workflow.name,
+      saveDirectoryPath: savedConfig?.directoryPath || null,
+      generationsPath: savedConfig?.generationsPath || null,
+      lastSavedAt: savedConfig?.lastSavedAt || null,
+      hasUnsavedChanges: false,
     });
-
-    syncNodeIdCounter(dedupedNodes);
-
-    if (typeof window !== "undefined") {
-      dedupedNodes.forEach((node) => {
-        const payload = extractNodeImagePayload(node);
-        if (payload) {
-          saveNodeImageData(node.id, { type: node.type, data: payload });
-        } else {
-          deleteNodeImageData(node.id);
-        }
-      });
-    }
   },
 
   clearWorkflow: () => {
     set({
       nodes: [],
       edges: [],
+      groups: {},
       isRunning: false,
       currentNodeId: null,
+      // Reset auto-save state when clearing workflow
+      workflowId: null,
+      workflowName: null,
+      saveDirectoryPath: null,
+      generationsPath: null,
+      lastSavedAt: null,
+      hasUnsavedChanges: false,
     });
-    if (typeof window !== "undefined") {
-      clearAllNodeImageData();
-    }
   },
 
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => {
@@ -1110,136 +1398,134 @@ export const useWorkflowStore = create<WorkflowStore>()(
     set({ globalImageHistory: [] });
   },
 
-  // Undo/Redo functions
-  saveToHistory: () => {
-    const { nodes, edges, historyStack, historyIndex } = get();
-    
-    // Create a new history snapshot
-    const newHistoryEntry = { 
-      nodes: JSON.parse(JSON.stringify(nodes)), 
-      edges: JSON.parse(JSON.stringify(edges))
-    };
-    
-    // Remove any entries after the current index
-    const newHistoryStack = historyStack.slice(0, historyIndex + 1);
-    
-    // Add the new entry
-    newHistoryStack.push(newHistoryEntry);
-    
-    // Limit history size to 50 entries
-    if (newHistoryStack.length > 50) {
-      newHistoryStack.shift();
-    }
-    
-    set({ 
-      historyStack: newHistoryStack,
-      historyIndex: newHistoryStack.length - 1
+  // Auto-save actions
+  setWorkflowMetadata: (id: string, name: string, path: string, generationsPath: string | null) => {
+    set({
+      workflowId: id,
+      workflowName: name,
+      saveDirectoryPath: path,
+      generationsPath: generationsPath,
     });
   },
 
-  undo: () => {
-    const { historyStack, historyIndex } = get();
-    
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      const { nodes, edges } = historyStack[newIndex];
-      
-      set({
-        nodes,
-        edges,
-        historyIndex: newIndex
-      });
-    }
+  setWorkflowName: (name: string) => {
+    set({
+      workflowName: name,
+      hasUnsavedChanges: true,
+    });
   },
 
-  redo: () => {
-    const { historyStack, historyIndex } = get();
-    
-    if (historyIndex < historyStack.length - 1) {
-      const newIndex = historyIndex + 1;
-      const { nodes, edges } = historyStack[newIndex];
-      
-      set({
+  setGenerationsPath: (path: string | null) => {
+    set({
+      generationsPath: path,
+    });
+  },
+
+  setAutoSaveEnabled: (enabled: boolean) => {
+    set({ autoSaveEnabled: enabled });
+  },
+
+  markAsUnsaved: () => {
+    set({ hasUnsavedChanges: true });
+  },
+
+  saveToFile: async () => {
+    const {
+      nodes,
+      edges,
+      edgeStyle,
+      groups,
+      workflowId,
+      workflowName,
+      saveDirectoryPath,
+    } = get();
+
+    if (!workflowId || !workflowName || !saveDirectoryPath) {
+      return false;
+    }
+
+    set({ isSaving: true });
+
+    try {
+      const workflow: WorkflowFile = {
+        version: 1,
+        id: workflowId,
+        name: workflowName,
         nodes,
         edges,
-        historyIndex: newIndex
+        edgeStyle,
+        groups: Object.keys(groups).length > 0 ? groups : undefined,
+      };
+
+      const response = await fetch("/api/workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directoryPath: saveDirectoryPath,
+          filename: workflowName,
+          workflow,
+        }),
       });
-    }
-  },
-};
-    },
-    {
-      name: "node-banana-workflow",
-      version: 1, // Increment to force migration/reset
-      partialize: (state) => {
-        const nodesWithoutImages = state.nodes.map((node) => {
-          switch (node.type) {
-            case "imageInput": {
-              const data = node.data as ImageInputNodeData;
-              return { ...node, data: { ...data, image: null } as WorkflowNodeData };
-            }
-            case "annotation": {
-              const data = node.data as AnnotationNodeData;
-              return {
-                ...node,
-                data: { ...data, sourceImage: null, outputImage: null } as WorkflowNodeData,
-              };
-            }
-            case "nanoBanana": {
-              const data = node.data as NanoBananaNodeData;
-              return {
-                ...node,
-                data: { ...data, inputImages: [], outputImage: null } as WorkflowNodeData,
-              };
-            }
-            case "output": {
-              const data = node.data as OutputNodeData;
-              return { ...node, data: { ...data, image: null } as WorkflowNodeData };
-            }
-            default:
-              return node;
-          }
+
+      const result = await response.json();
+
+      if (result.success) {
+        const timestamp = Date.now();
+        set({
+          lastSavedAt: timestamp,
+          hasUnsavedChanges: false,
+          isSaving: false,
         });
 
-        return {
-          nodes: nodesWithoutImages,
-          edges: state.edges,
-          edgeStyle: state.edgeStyle,
-        };
-      },
-      merge: (persistedState: any, currentState) => {
-        // Merge persisted state with current state, ensuring defaults
-        return {
-          ...currentState,
-          ...persistedState,
-          globalImageHistory: [], // Always start with empty history
-          isRunning: false,
-          currentNodeId: null,
-          pausedAtNodeId: null,
-          clipboard: null,
-        };
-      },
-      onRehydrateStorage: () => {
-        return () => {
-          const currentState = workflowStoreGetter?.();
-          if (currentState) {
-            const { nodes: dedupedNodes, removedIds } = deduplicateWorkflowNodes(currentState.nodes);
-            if (removedIds.length && workflowStoreSetter) {
-              workflowStoreSetter((state) => ({
-                ...state,
-                nodes: dedupedNodes,
-              }));
-              console.warn(
-                `[workflowStore] Removed duplicate node ids on hydrate: ${removedIds.join(", ")}`
-              );
-            }
+        // Update localStorage
+        saveSaveConfig({
+          workflowId,
+          name: workflowName,
+          directoryPath: saveDirectoryPath,
+          generationsPath: get().generationsPath,
+          lastSavedAt: timestamp,
+        });
 
-            const latestNodes = workflowStoreGetter?.().nodes ?? dedupedNodes ?? [];
-            syncNodeIdCounter(latestNodes);
-          }
-          restoreNodeImagesFromCache?.();
-        };
-      },
+        return true;
+      } else {
+        set({ isSaving: false });
+        useToast.getState().show(`Auto-save failed: ${result.error}`, "error");
+        return false;
+      }
+    } catch (error) {
+      set({ isSaving: false });
+      useToast
+        .getState()
+        .show(
+          `Auto-save failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          "error"
+        );
+      return false;
     }
-  )
-);
+  },
+
+  initializeAutoSave: () => {
+    if (autoSaveIntervalId) return;
+
+    autoSaveIntervalId = setInterval(async () => {
+      const state = get();
+      if (
+        state.autoSaveEnabled &&
+        state.hasUnsavedChanges &&
+        state.workflowId &&
+        state.workflowName &&
+        state.saveDirectoryPath &&
+        !state.isSaving
+      ) {
+        await state.saveToFile();
+      }
+    }, 90 * 1000); // 90 seconds
+  },
+
+  cleanupAutoSave: () => {
+    if (autoSaveIntervalId) {
+      clearInterval(autoSaveIntervalId);
+      autoSaveIntervalId = null;
+    }
+  },
+}));

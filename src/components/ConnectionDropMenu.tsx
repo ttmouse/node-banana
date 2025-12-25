@@ -4,14 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { NodeType } from "@/types";
 
 // Actions are special menu items that trigger behavior instead of creating a node
-export type MenuAction = "splitGrid" | "splitGridCustom";
-
-// State for the grid selector overlay
-export interface GridSelectorState {
-  position: { x: number; y: number };
-  sourceNodeId: string;
-  flowPosition: { x: number; y: number };
-}
+export type MenuAction = "splitGridImmediate";
 
 interface MenuOption {
   type: NodeType | MenuAction;
@@ -42,8 +35,7 @@ const IMAGE_TARGET_OPTIONS: MenuOption[] = [
   },
   {
     type: "splitGrid",
-    label: "Split Image Grid (Auto)",
-    isAction: true,
+    label: "Split Grid Node",
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
@@ -51,12 +43,12 @@ const IMAGE_TARGET_OPTIONS: MenuOption[] = [
     ),
   },
   {
-    type: "splitGridCustom",
-    label: "Split Image Grid (Custom)",
+    type: "splitGridImmediate",
+    label: "Split Grid Now",
     isAction: true,
     icon: (
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.125 0h-7.5A1.125 1.125 0 0112 5.625m0 0V4.875c0-.621.504-1.125 1.125-1.125h7.5c.621 0 1.125.504 1.125 1.125v1.5zM3.375 5.625c0-.621.504-1.125 1.125-1.125h7.5c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125h-7.5a1.125 1.125 0 01-1.125-1.125v-1.5z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
       </svg>
     ),
   },
@@ -267,177 +259,6 @@ export function ConnectionDropMenu({
         </span>
         <span className="text-[9px] text-neutral-500">
           <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">↵</kbd> select
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// Grid selector overlay component
-export function GridSelectorOverlay({
-  position,
-  sourceNodeId,
-  flowPosition,
-  onConfirm,
-  onClose,
-}: {
-  position: { x: number; y: number };
-  sourceNodeId: string;
-  flowPosition: { x: number; y: number };
-  onConfirm: (rows: number, cols: number) => void;
-  onClose: () => void;
-}) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [rows, setRows] = useState(3);
-  const [cols, setCols] = useState(3);
-  const [isDragging, setIsDragging] = useState(false);
-
-  // Close when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (overlayRef.current && !overlayRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
-
-  // Handle keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "Escape":
-          e.preventDefault();
-          onClose();
-          break;
-        case "Enter":
-          e.preventDefault();
-          onConfirm(rows, cols);
-          break;
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [rows, cols, onConfirm, onClose]);
-
-  // Handle mouse drag to select grid size
-  const handleCellClick = useCallback((row: number, col: number) => {
-    setRows(row + 1);
-    setCols(col + 1);
-  }, []);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDragging || !gridRef.current) return;
-
-    const rect = gridRef.current.getBoundingClientRect();
-    const cellSize = 30; // Each cell is 30px
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    const newCols = Math.min(6, Math.max(1, Math.ceil(x / cellSize)));
-    const newRows = Math.min(6, Math.max(1, Math.ceil(y / cellSize)));
-
-    setCols(newCols);
-    setRows(newRows);
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDragging) {
-      document.addEventListener("mouseup", handleMouseUp);
-      return () => document.removeEventListener("mouseup", handleMouseUp);
-    }
-  }, [isDragging, handleMouseUp]);
-
-  return (
-    <div
-      ref={overlayRef}
-      className="fixed z-100 bg-neutral-800 border border-neutral-600 rounded-lg shadow-xl p-4 outline-none"
-      style={{
-        left: position.x,
-        top: position.y,
-        transform: "translate(-50%, -50%)",
-        width: "280px",
-      }}
-    >
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-neutral-200 mb-1">Select Grid Size</h3>
-        <p className="text-xs text-neutral-400">Click or drag to select rows and columns</p>
-      </div>
-
-      <div 
-        ref={gridRef}
-        className="mb-4 bg-neutral-900 rounded p-2 cursor-crosshair select-none"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        style={{ userSelect: "none" }}
-      >
-        <div 
-          className="grid gap-1"
-          style={{ 
-            gridTemplateColumns: `repeat(6, 30px)`,
-            gridTemplateRows: `repeat(6, 30px)`
-          }}
-        >
-          {Array.from({ length: 36 }).map((_, index) => {
-            const row = Math.floor(index / 6);
-            const col = index % 6;
-            const isSelected = row < rows && col < cols;
-
-            return (
-              <div
-                key={index}
-                className={`border rounded transition-colors ${
-                  isSelected 
-                    ? "bg-blue-600 border-blue-500" 
-                    : "bg-neutral-800 border-neutral-700"
-                }`}
-                onClick={() => handleCellClick(row, col)}
-                style={{ width: "30px", height: "30px" }}
-              />
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="mb-4 text-center">
-        <span className="text-neutral-300 text-sm font-medium">
-          {rows} × {cols} ({rows * cols} images)
-        </span>
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={onClose}
-          className="flex-1 px-3 py-2 text-xs font-medium bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onConfirm(rows, cols)}
-          className="flex-1 px-3 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
-        >
-          Split Image
-        </button>
-      </div>
-
-      <div className="mt-2 text-center">
-        <span className="text-neutral-500 text-[9px]">
-          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">ESC</kbd> Cancel
-          <span className="mx-2">|</span>
-          <kbd className="px-1 py-0.5 bg-neutral-700 rounded text-[8px]">Enter</kbd> Confirm
         </span>
       </div>
     </div>

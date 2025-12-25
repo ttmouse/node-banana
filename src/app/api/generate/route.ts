@@ -157,15 +157,16 @@ export async function POST(request: NextRequest) {
         
         // If we got here, the request succeeded
         break;
-      } catch (fetchError) {
+      } catch (fetchError: unknown) {
         retryCount++;
-        console.error(`[API:${requestId}] Attempt ${retryCount} failed:`, fetchError.message);
+        const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        console.error(`[API:${requestId}] Attempt ${retryCount} failed:`, errorMessage);
         
         // Check if this is a network/fetch error that might be retriable
-        const isNetworkError = fetchError.message.includes('fetch failed') || 
-                              fetchError.message.includes('ECONNRESET') || 
-                              fetchError.message.includes('ETIMEDOUT') || 
-                              fetchError.message.includes('ENOTFOUND');
+        const isNetworkError = errorMessage.includes('fetch failed') || 
+                              errorMessage.includes('ECONNRESET') || 
+                              errorMessage.includes('ETIMEDOUT') || 
+                              errorMessage.includes('ENOTFOUND');
         
         if (retryCount > maxRetries || !isNetworkError) {
           // If we've exhausted retries or this isn't a network error, re-throw
@@ -176,6 +177,10 @@ export async function POST(request: NextRequest) {
 
     const geminiDuration = Date.now() - geminiStartTime;
     console.log(`[API:${requestId}] Gemini API call completed in ${geminiDuration}ms`);
+
+    if (!response) {
+      throw new Error("Failed to get response from Gemini");
+    }
 
     // Extract image from response
     console.log(`[API:${requestId}] Processing response...`);

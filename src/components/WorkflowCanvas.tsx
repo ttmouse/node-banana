@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useRef,
-  useState,
-  useEffect,
-  useMemo,
-  DragEvent,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useCallback, useRef, useState, useEffect, DragEvent, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -19,9 +11,8 @@ import {
   Connection,
   Edge,
   useReactFlow,
-  ReactFlowProvider,
   OnConnectEnd,
-  SelectionMode,
+  Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -32,15 +23,17 @@ import {
   PromptNode,
   NanoBananaNode,
   LLMGenerateNode,
+  SplitGridNode,
   OutputNode,
 } from "./nodes";
-import { EditableEdge } from "./edges";
-import { ConnectionDropMenu, MenuAction, GridSelectorOverlay } from "./ConnectionDropMenu";
+import { EditableEdge, ReferenceEdge } from "./edges";
+import { ConnectionDropMenu, MenuAction } from "./ConnectionDropMenu";
 import { MultiSelectToolbar } from "./MultiSelectToolbar";
 import { EdgeToolbar } from "./EdgeToolbar";
 import { GlobalImageHistory } from "./GlobalImageHistory";
+import { GroupBackgroundsPortal, GroupControlsOverlay } from "./GroupsOverlay";
 import { NodeType, NanoBananaNodeData } from "@/types";
-import { detectAndSplitGrid, splitWithDimensions } from "@/utils/gridSplitter";
+import { detectAndSplitGrid } from "@/utils/gridSplitter";
 
 const nodeTypes: NodeTypes = {
   imageInput: ImageInputNode,
@@ -48,11 +41,13 @@ const nodeTypes: NodeTypes = {
   prompt: PromptNode,
   nanoBanana: NanoBananaNode,
   llmGenerate: LLMGenerateNode,
+  splitGrid: SplitGridNode,
   output: OutputNode,
 };
 
 const edgeTypes: EdgeTypes = {
   editable: EditableEdge,
+  reference: ReferenceEdge,
 };
 
 // Connection validation rules
@@ -79,7 +74,7 @@ const isValidConnection = (connection: Edge | Connection): boolean => {
 const getNodeHandles = (nodeType: string): { inputs: string[]; outputs: string[] } => {
   switch (nodeType) {
     case "imageInput":
-      return { inputs: [], outputs: ["image"] };
+      return { inputs: ["reference"], outputs: ["image"] };
     case "annotation":
       return { inputs: ["image"], outputs: ["image"] };
     case "prompt":
@@ -88,6 +83,8 @@ const getNodeHandles = (nodeType: string): { inputs: string[]; outputs: string[]
       return { inputs: ["image", "text"], outputs: ["image"] };
     case "llmGenerate":
       return { inputs: ["text", "image"], outputs: ["text"] };
+    case "splitGrid":
+      return { inputs: ["image"], outputs: ["reference"] };
     case "output":
       return { inputs: ["image"], outputs: [] };
     default:
@@ -104,156 +101,72 @@ interface ConnectionDropState {
   sourceHandleId: string | null;
 }
 
-function WorkflowCanvasInner() {
-  const { 
-    nodes, 
-    edges, 
-    onNodesChange, 
-    onEdgesChange, 
-    onConnect, 
-    addNode, 
-    updateNodeData, 
-    loadWorkflow, 
-    getNodeById, 
-    addToGlobalHistory,
-    spaceBarPressed,
-    setSpaceBarPressed,
-    undo,
-    redo
-  } = useWorkflowStore();
-  const { screenToFlowPosition, getViewport, setViewport, fitView, zoomIn, zoomOut } = useReactFlow();
-  const [currentZoom, setCurrentZoom] = useState(getViewport().zoom);
+// Detect if running on macOS for platform-specific trackpad behavior
+const isMacOS = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+// Detect if a wheel event is from a mouse (vs trackpad)
+const isMouseWheel = (event: WheelEvent): boolean => {
+  // Mouse scroll wheel typically uses deltaMode 1 (lines) or has large discrete deltas
+  // Trackpad uses deltaMode 0 (pixels) with smaller, smoother deltas
+  if (event.deltaMode === 1) return true; // DOM_DELTA_LINE = mouse
+
+  // Fallback: large delta values suggest mouse wheel
+  const threshold = 50;
+  return Math.abs(event.deltaY) >= threshold &&
+         Math.abs(event.deltaY) % 40 === 0; // Mouse deltas often in multiples
+};
+
+export function WorkflowCanvas() {
+  const { nodes, edges, groups, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory, setNodeGroupId, regenerateNode } =
+    useWorkflowStore();
+  const { screenToFlowPosition, getViewport, zoomIn, zoomOut, setViewport } = useReactFlow();
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropType, setDropType] = useState<"image" | "workflow" | "node" | null>(null);
   const [connectionDrop, setConnectionDrop] = useState<ConnectionDropState | null>(null);
   const [isSplitting, setIsSplitting] = useState(false);
-  const [gridSelector, setGridSelector] = useState<{ position: { x: number; y: number }; sourceNodeId: string; flowPosition: { x: number; y: number } } | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  
-  // Handle keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Space bar for canvas panning
-      if (event.code === 'Space' && !event.repeat) {
-        event.preventDefault();
-        setSpaceBarPressed(true);
-      }
-      
-      // Zoom shortcuts
-      if ((event.metaKey || event.ctrlKey)) {
-        switch (event.key) {
-          case '0':
-            event.preventDefault();
-            fitView({ duration: 300 });
-            break;
-          case '1':
-          case 'İ': // Handle ⇧ + 1 on some keyboards
-            event.preventDefault();
-            setViewport({ zoom: 1 }, { duration: 300 });
-            break;
-          case '=':
-          case '+':
-          case '˝': // Handle ⇧ + = on some keyboards
-            event.preventDefault();
-            zoomIn({ duration: 200 });
-            break;
-          case '-':
-          case '˜': // Handle ⇧ + - on some keyboards
-            event.preventDefault();
-            zoomOut({ duration: 200 });
-            break;
-          case 'z':
-            event.preventDefault();
-            if (event.shiftKey) {
-              // Redo (Ctrl+Shift+Z or Cmd+Shift+Z)
-              redo();
-            } else {
-              // Undo (Ctrl+Z or Cmd+Z)
-              undo();
-            }
-            break;
+
+  // Just pass regular nodes to React Flow - groups are rendered separately
+  const allNodes = useMemo(() => {
+    return nodes;
+  }, [nodes]);
+
+
+  // Check if a node was dropped into a group and add it to that group
+  const handleNodeDragStop = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      // Skip if it's a group node
+      if (node.id.startsWith("group-")) return;
+
+      const nodeWidth = (node.style?.width as number) || 300;
+      const nodeHeight = (node.style?.height as number) || 280;
+      const nodeCenterX = node.position.x + nodeWidth / 2;
+      const nodeCenterY = node.position.y + nodeHeight / 2;
+
+      // Check if node center is inside any group
+      let targetGroupId: string | undefined;
+
+      for (const group of Object.values(groups)) {
+        const inBoundsX = nodeCenterX >= group.position.x && nodeCenterX <= group.position.x + group.size.width;
+        const inBoundsY = nodeCenterY >= group.position.y && nodeCenterY <= group.position.y + group.size.height;
+
+        if (inBoundsX && inBoundsY) {
+          targetGroupId = group.id;
+          break;
         }
       }
-    };
-    
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.code === 'Space') {
-        event.preventDefault();
-        setSpaceBarPressed(false);
-      }
-    };
-    
-    // Add mouse down/up handlers to update cursor during dragging
-    const handleMouseDown = () => {
-      if (spaceBarPressed) {
-        document.body.style.cursor = 'grabbing';
-      }
-    };
-    
-    const handleMouseUp = () => {
-      if (spaceBarPressed) {
-        document.body.style.cursor = 'grab';
-      }
-    };
-    
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
-    document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('mouseup', handleMouseUp);
-    
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('keyup', handleKeyUp);
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-    };
-  }, [spaceBarPressed, setSpaceBarPressed]);
 
-  // Debounce function to limit update frequency
-  const debounce = (func: Function, delay: number) => {
-    let timeoutId: number;
-    return (...args: any[]) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => func(...args), delay);
-    };
-  };
-  
-  // Create a timeout reference for debouncing
-  const zoomTimeoutRef = useRef<number | null>(null);
-  
-  // Track zoom changes with immediate CSS variable update
-  const onViewportChange = useCallback((event: any) => {
-    const newZoom = event.zoom || getViewport().zoom;
-    
-    // Update CSS variable immediately during zoom
-    document.documentElement.style.setProperty('--zoom-level', newZoom.toString());
-    
-    // Clear any pending timeout
-    if (zoomTimeoutRef.current !== null) {
-      clearTimeout(zoomTimeoutRef.current);
-    }
-    
-    // Update state after a short delay to stabilize
-    zoomTimeoutRef.current = window.setTimeout(() => {
-      if (Math.abs(newZoom - currentZoom) > 0.01) {
-        setCurrentZoom(newZoom);
+      // Get current groupId of the node
+      const currentNode = nodes.find((n) => n.id === node.id);
+      const currentGroupId = currentNode?.groupId;
+
+      // Update groupId if it changed
+      if (targetGroupId !== currentGroupId) {
+        setNodeGroupId(node.id, targetGroupId);
       }
-    }, 50);
-  }, [getViewport, currentZoom]);
-  
-  // Set initial zoom
-  useEffect(() => {
-    const initialZoom = getViewport().zoom;
-    setCurrentZoom(initialZoom);
-    document.documentElement.style.setProperty('--zoom-level', initialZoom.toString());
-  }, [getViewport]);
-
-
-  
-  const handlePaneContextMenu = useCallback((event: ReactMouseEvent) => {
-    event.preventDefault();
-  }, []);
+    },
+    [groups, nodes, setNodeGroupId]
+  );
 
   const handleConnect = useCallback(
     (connection: Connection) => {
@@ -385,92 +298,6 @@ function WorkflowCanvasInner() {
     [screenToFlowPosition, nodes, getNodeHandles, handleConnect]
   );
 
-  // Handle grid size selection
-  const handleGridSelection = useCallback(
-    async (rows: number, cols: number, sourceNodeId: string, flowPosition: { x: number; y: number }) => {
-      const sourceNode = getNodeById(sourceNodeId);
-      if (!sourceNode) return;
-
-      // Get the output image from the source node
-      let sourceImage: string | null = null;
-      if (sourceNode.type === "nanoBanana") {
-        sourceImage = (sourceNode.data as NanoBananaNodeData).outputImage;
-      } else if (sourceNode.type === "imageInput") {
-        sourceImage = (sourceNode.data as { image: string | null }).image;
-      } else if (sourceNode.type === "annotation") {
-        sourceImage = (sourceNode.data as { outputImage: string | null }).outputImage;
-      }
-
-      if (!sourceImage) {
-        alert("No image available to split. Generate or load an image first.");
-        return;
-      }
-
-      const sourceNodeData = sourceNode.type === "nanoBanana" ? sourceNode.data as NanoBananaNodeData : null;
-      setIsSplitting(true);
-      setGridSelector(null);
-
-      try {
-        // Use user-specified dimensions instead of auto-detection
-        const { grid, images } = await splitWithDimensions(sourceImage, rows, cols);
-
-        if (images.length === 0) {
-          alert("Failed to split image with specified dimensions.");
-          setIsSplitting(false);
-          return;
-        }
-
-        // Calculate layout for the new nodes
-        const nodeWidth = 300;
-        const nodeHeight = 280;
-        const gap = 20;
-
-        // Add split images to global history
-        images.forEach((imageData: string, index: number) => {
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-          addToGlobalHistory({
-            image: imageData,
-            timestamp: Date.now() + index,
-            prompt: `Split ${row + 1}-${col + 1} from ${rows}x${cols} grid`,
-            aspectRatio: sourceNodeData?.aspectRatio || "1:1",
-            model: sourceNodeData?.model || "nano-banana",
-          });
-        });
-
-        // Create ImageInput nodes arranged in a grid matching the layout
-        images.forEach((imageData: string, index: number) => {
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-
-          const nodeId = addNode("imageInput", {
-            x: flowPosition.x + col * (nodeWidth + gap),
-            y: flowPosition.y + row * (nodeHeight + gap),
-          });
-
-          // Get dimensions from the split image
-          const img = new Image();
-          img.onload = () => {
-            updateNodeData(nodeId, {
-              image: imageData,
-              filename: `split-${row + 1}-${col + 1}.png`,
-              dimensions: { width: img.width, height: img.height },
-            });
-          };
-          img.src = imageData;
-        });
-
-        console.log(`[SplitGrid] Created ${images.length} nodes from ${rows}x${cols} grid`);
-      } catch (error) {
-        console.error("[SplitGrid] Error:", error);
-        alert("Failed to split image grid: " + (error instanceof Error ? error.message : "Unknown error"));
-      } finally {
-        setIsSplitting(false);
-      }
-    },
-    [getNodeById, addNode, updateNodeData, addToGlobalHistory]
-  );
-
   // Handle the splitGrid action - uses automated grid detection
   const handleSplitGridAction = useCallback(
     async (sourceNodeId: string, flowPosition: { x: number; y: number }) => {
@@ -581,19 +408,8 @@ function WorkflowCanvasInner() {
 
       // Handle actions differently from node creation
       if (selection.isAction) {
-        if (selection.type === "splitGrid" && sourceNodeId) {
-          // Use auto-detection
+        if (selection.type === "splitGridImmediate" && sourceNodeId) {
           handleSplitGridAction(sourceNodeId, flowPosition);
-        } else if (selection.type === "splitGridCustom" && sourceNodeId) {
-          // Show grid selector overlay
-          setGridSelector({
-            position: {
-              x: connectionDrop.position.x,
-              y: connectionDrop.position.y
-            },
-            sourceNodeId,
-            flowPosition
-          });
         }
         setConnectionDrop(null);
         return;
@@ -619,7 +435,7 @@ function WorkflowCanvasInner() {
 
       // Map handle type to the correct handle ID based on node type
       if (handleType === "image") {
-        if (nodeType === "annotation" || nodeType === "output") {
+        if (nodeType === "annotation" || nodeType === "output" || nodeType === "splitGrid") {
           targetHandleId = "image";
         } else if (nodeType === "nanoBanana") {
           targetHandleId = "image";
@@ -702,8 +518,45 @@ function WorkflowCanvasInner() {
     setConnectionDrop(null);
   }, []);
 
-  // Get copy/paste functions from store
-  const { copySelectedNodes, pasteNodes } = useWorkflowStore();
+  // Custom wheel handler for macOS trackpad support
+  const handleWheel = useCallback((event: React.WheelEvent) => {
+    // Pinch gesture (ctrlKey) always zooms
+    if (event.ctrlKey) {
+      event.preventDefault();
+      if (event.deltaY < 0) zoomIn();
+      else zoomOut();
+      return;
+    }
+
+    // On macOS, differentiate trackpad from mouse
+    if (isMacOS) {
+      const nativeEvent = event.nativeEvent;
+      if (isMouseWheel(nativeEvent)) {
+        // Mouse wheel → zoom
+        event.preventDefault();
+        if (event.deltaY < 0) zoomIn();
+        else zoomOut();
+      } else {
+        // Trackpad scroll → pan
+        event.preventDefault();
+        const viewport = getViewport();
+        setViewport({
+          x: viewport.x - event.deltaX,
+          y: viewport.y - event.deltaY,
+          zoom: viewport.zoom,
+        });
+      }
+      return;
+    }
+
+    // Non-macOS: default zoom behavior
+    event.preventDefault();
+    if (event.deltaY < 0) zoomIn();
+    else zoomOut();
+  }, [zoomIn, zoomOut, getViewport, setViewport]);
+
+  // Get copy/paste functions and clipboard from store
+  const { copySelectedNodes, pasteNodes, clearClipboard, clipboard } = useWorkflowStore();
 
   // Keyboard shortcuts for copy/paste and stacking selected nodes
   useEffect(() => {
@@ -723,10 +576,115 @@ function WorkflowCanvasInner() {
         return;
       }
 
+      // Helper to get viewport center position in flow coordinates
+      const getViewportCenter = () => {
+        const viewport = getViewport();
+        const centerX = (-viewport.x + window.innerWidth / 2) / viewport.zoom;
+        const centerY = (-viewport.y + window.innerHeight / 2) / viewport.zoom;
+        return { centerX, centerY };
+      };
+
+      // Handle node creation hotkeys (Shift + key)
+      if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        const key = event.key.toLowerCase();
+        let nodeType: NodeType | null = null;
+
+        switch (key) {
+          case "p":
+            nodeType = "prompt";
+            break;
+          case "i":
+            nodeType = "imageInput";
+            break;
+          case "g":
+            nodeType = "nanoBanana";
+            break;
+          case "l":
+            nodeType = "llmGenerate";
+            break;
+          case "a":
+            nodeType = "annotation";
+            break;
+        }
+
+        if (nodeType) {
+          event.preventDefault();
+          const { centerX, centerY } = getViewportCenter();
+          // Offset by half the default node dimensions to center it
+          const defaultDimensions: Record<NodeType, { width: number; height: number }> = {
+            imageInput: { width: 300, height: 280 },
+            annotation: { width: 300, height: 280 },
+            prompt: { width: 320, height: 220 },
+            nanoBanana: { width: 300, height: 300 },
+            llmGenerate: { width: 320, height: 360 },
+            splitGrid: { width: 300, height: 320 },
+            output: { width: 320, height: 320 },
+          };
+          const dims = defaultDimensions[nodeType];
+          addNode(nodeType, { x: centerX - dims.width / 2, y: centerY - dims.height / 2 });
+          return;
+        }
+      }
+
       // Handle paste (Ctrl/Cmd + V)
       if ((event.ctrlKey || event.metaKey) && event.key === "v") {
         event.preventDefault();
-        pasteNodes();
+
+        // If we have nodes in the internal clipboard, prioritize pasting those
+        if (clipboard && clipboard.nodes.length > 0) {
+          pasteNodes();
+          clearClipboard(); // Clear so next paste uses system clipboard
+          return;
+        }
+
+        // Check system clipboard for images first, then text
+        navigator.clipboard.read().then(async (items) => {
+          for (const item of items) {
+            // Check for image
+            const imageType = item.types.find(type => type.startsWith('image/'));
+            if (imageType) {
+              const blob = await item.getType(imageType);
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const dataUrl = e.target?.result as string;
+                const viewport = getViewport();
+                const centerX = (-viewport.x + window.innerWidth / 2) / viewport.zoom;
+                const centerY = (-viewport.y + window.innerHeight / 2) / viewport.zoom;
+
+                const img = new Image();
+                img.onload = () => {
+                  // ImageInput node default dimensions: 300x280
+                  const nodeId = addNode("imageInput", { x: centerX - 150, y: centerY - 140 });
+                  updateNodeData(nodeId, {
+                    image: dataUrl,
+                    filename: `pasted-${Date.now()}.png`,
+                    dimensions: { width: img.width, height: img.height },
+                  });
+                };
+                img.src = dataUrl;
+              };
+              reader.readAsDataURL(blob);
+              return; // Exit after handling image
+            }
+
+            // Check for text
+            if (item.types.includes('text/plain')) {
+              const blob = await item.getType('text/plain');
+              const text = await blob.text();
+              if (text.trim()) {
+                const viewport = getViewport();
+                const centerX = (-viewport.x + window.innerWidth / 2) / viewport.zoom;
+                const centerY = (-viewport.y + window.innerHeight / 2) / viewport.zoom;
+                // Prompt node default dimensions: 320x220
+                const nodeId = addNode("prompt", { x: centerX - 160, y: centerY - 110 });
+                updateNodeData(nodeId, { prompt: text });
+                return; // Exit after handling text
+              }
+            }
+          }
+        }).catch(() => {
+          // Clipboard API failed - nothing to paste
+        });
         return;
       }
 
@@ -825,7 +783,7 @@ function WorkflowCanvasInner() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -984,7 +942,6 @@ function WorkflowCanvasInner() {
     <div
       ref={reactFlowWrapper}
       className={`flex-1 bg-canvas-bg relative ${isDragOver ? "ring-2 ring-inset ring-blue-500" : ""}`}
-      style={{ cursor: spaceBarPressed ? 'grab' : 'default' }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1004,18 +961,6 @@ function WorkflowCanvasInner() {
         </div>
       )}
 
-      {/* Space bar pressed indicator */}
-      {spaceBarPressed && (
-        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
-          <div className="bg-neutral-800/90 border border-neutral-600 rounded-lg px-4 py-2 shadow-xl flex items-center gap-2">
-            <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-            <p className="text-neutral-200 text-sm font-medium">按住空格键拖动画布</p>
-          </div>
-        </div>
-      )}
-
       {/* Splitting indicator */}
       {isSplitting && (
         <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center">
@@ -1027,34 +972,35 @@ function WorkflowCanvasInner() {
       )}
 
       <ReactFlow
-        nodes={nodes}
+        nodes={allNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={handleConnect}
         onConnectEnd={handleConnectEnd}
+        onNodeDragStop={handleNodeDragStop}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         isValidConnection={isValidConnection}
         fitView
         deleteKeyCode={["Backspace", "Delete"]}
         multiSelectionKeyCode="Shift"
-        selectionOnDrag
-        selectionMode={SelectionMode.Partial}
-        panOnDrag={[1, 2]}
-        panActivationKeyCode="Space"
-        selectNodesOnDrag={!spaceBarPressed}
-        nodesDraggable={!spaceBarPressed}
+        selectionOnDrag={isMacOS}
+        panOnDrag={!isMacOS}
+        selectNodesOnDrag={false}
         nodeDragThreshold={5}
+        zoomOnScroll={false}
+        zoomOnPinch={true}
+        panActivationKeyCode="Space"
+        onWheel={handleWheel}
         className="bg-neutral-900"
         defaultEdgeOptions={{
           type: "editable",
           animated: false,
         }}
-        onPaneContextMenu={handlePaneContextMenu}
-        onMove={onViewportChange}
-        onPaneClick={() => {}} // Ensure onMove events fire properly
       >
+        <GroupBackgroundsPortal />
+        <GroupControlsOverlay />
         <Background color="#404040" gap={20} size={1} />
         <Controls className="bg-neutral-800 border border-neutral-700 rounded-lg shadow-lg [&>button]:bg-neutral-800 [&>button]:border-neutral-700 [&>button]:fill-neutral-300 [&>button:hover]:bg-neutral-700 [&>button:hover]:fill-neutral-100" />
         <MiniMap
@@ -1072,6 +1018,8 @@ function WorkflowCanvasInner() {
                 return "#22c55e";
               case "llmGenerate":
                 return "#06b6d4";
+              case "splitGrid":
+                return "#f59e0b";
               case "output":
                 return "#ef4444";
               default:
@@ -1092,17 +1040,6 @@ function WorkflowCanvasInner() {
         />
       )}
 
-      {/* Grid selector overlay */}
-      {gridSelector && (
-        <GridSelectorOverlay
-          position={gridSelector.position}
-          sourceNodeId={gridSelector.sourceNodeId}
-          flowPosition={gridSelector.flowPosition}
-          onConfirm={(rows, cols) => handleGridSelection(rows, cols, gridSelector.sourceNodeId, gridSelector.flowPosition)}
-          onClose={() => setGridSelector(null)}
-        />
-      )}
-
       {/* Multi-select toolbar */}
       <MultiSelectToolbar />
 
@@ -1112,14 +1049,5 @@ function WorkflowCanvasInner() {
       {/* Global image history */}
       <GlobalImageHistory />
     </div>
-  );
-}
-
-// Wrap with ReactFlowProvider to enable useReactFlow hook
-export function WorkflowCanvas() {
-  return (
-    <ReactFlowProvider>
-      <WorkflowCanvasInner />
-    </ReactFlowProvider>
   );
 }

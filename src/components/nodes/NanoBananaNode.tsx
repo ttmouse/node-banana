@@ -261,7 +261,7 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
       </BaseNode>
       
       {/* Full size image preview modal using React Portal */}
-      {isPreviewModalOpen && createPortal(
+      {isPreviewModalOpen && nodeData.outputImage && createPortal(
         <div 
           className="fixed inset-0 z-[9999] bg-black flex items-center justify-center"
           onClick={() => setIsPreviewModalOpen(false)}
