@@ -122,7 +122,7 @@ const isMouseWheel = (event: WheelEvent): boolean => {
   // Fallback: large delta values suggest mouse wheel
   const threshold = 50;
   return Math.abs(event.deltaY) >= threshold &&
-         Math.abs(event.deltaY) % 40 === 0; // Mouse deltas often in multiples
+    Math.abs(event.deltaY) % 40 === 0; // Mouse deltas often in multiples
 };
 
 export function WorkflowCanvas() {
@@ -313,17 +313,17 @@ export function WorkflowCanvas() {
               // Create the connection
               const connection: Connection = isFromSource
                 ? {
-                    source: connectionState.fromNode.id,
-                    sourceHandle: fromHandleId,
-                    target: targetNodeId,
-                    targetHandle: compatibleHandle,
-                  }
+                  source: connectionState.fromNode.id,
+                  sourceHandle: fromHandleId,
+                  target: targetNodeId,
+                  targetHandle: compatibleHandle,
+                }
                 : {
-                    source: targetNodeId,
-                    sourceHandle: compatibleHandle,
-                    target: connectionState.fromNode.id,
-                    targetHandle: fromHandleId,
-                  };
+                  source: targetNodeId,
+                  sourceHandle: compatibleHandle,
+                  target: connectionState.fromNode.id,
+                  targetHandle: fromHandleId,
+                };
 
               if (isValidConnection(connection)) {
                 handleConnect(connection);
@@ -589,7 +589,7 @@ export function WorkflowCanvas() {
         else zoomOut();
       } else {
         // Trackpad scroll → pan
-        event.preventDefault();
+        // event.preventDefault(); // Passive listener warning fix
         const viewport = getViewport();
         setViewport({
           x: viewport.x - event.deltaX,
@@ -1087,8 +1087,8 @@ export function WorkflowCanvas() {
               {dropType === "workflow"
                 ? "Drop to load workflow"
                 : dropType === "node"
-                ? "Drop to create node"
-                : "Drop image to create node"}
+                  ? "Drop to create node"
+                  : "Drop image to create node"}
             </p>
           </div>
         </div>

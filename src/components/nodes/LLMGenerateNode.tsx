@@ -5,6 +5,7 @@ import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import { BaseNode } from "./BaseNode";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { LLMGenerateNodeData, LLMProvider, LLMModelType } from "@/types";
+import { useToast } from "@/components/Toast";
 
 const PROVIDERS: { value: LLMProvider; label: string }[] = [
   { value: "google", label: "Google" },
@@ -21,6 +22,17 @@ const MODELS: Record<LLMProvider, { value: LLMModelType; label: string }[]> = {
     { value: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
   ],
 };
+const PRESET_PROMPT = `Analyze this image and provide a structured description in JSON format with the following keys:
+1. "image_analysis": A detailed breakdown containing:
+   - "subject": Description of the main subject (appearance, pose, clothing).
+   - "environment": Setting, background elements, atmosphere.
+   - "lighting": Type, sources, quality of light.
+   - "technical_specs": Art style (e.g., photorealistic, 3D render), camera settings, resolution.
+   - "colors": Primary and secondary color palettes.
+2. "generated_prompt": A highly detailed, robust text prompt derived from the analysis, suitable for generating a similar image.
+3. "negative_prompt": A list of elements to avoid (e.g., low quality, blurry, text).
+
+Output ONLY valid JSON without Markdown formatting.`;
 
 type LLMGenerateNodeType = Node<LLMGenerateNodeData, "llmGenerate">;
 
@@ -72,6 +84,25 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
     updateNodeData(id, { outputText: null, status: "idle", error: null });
   }, [id, updateNodeData]);
 
+  const handleInstructionChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      updateNodeData(id, { instruction: e.target.value });
+    },
+    [id, updateNodeData]
+  );
+
+  const handleApplyPreset = useCallback(() => {
+    updateNodeData(id, { instruction: PRESET_PROMPT });
+    useToast.getState().show("Applied structured analysis preset", "success");
+  }, [id, updateNodeData]);
+
+  const handleCopy = useCallback(() => {
+    if (nodeData.outputText) {
+      navigator.clipboard.writeText(nodeData.outputText);
+      useToast.getState().show("Text copied to clipboard", "success");
+    }
+  }, [nodeData.outputText]);
+
   const availableModels = MODELS[nodeData.provider];
 
   return (
@@ -81,12 +112,21 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
       selected={selected}
       hasError={nodeData.status === "error"}
     >
+      {/* Image input */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="image"
+        style={{ top: "30%" }}
+        data-handletype="image"
+      />
+
       {/* Text input */}
       <Handle
         type="target"
         position={Position.Left}
         id="text"
-        style={{ top: "50%" }}
+        style={{ top: "70%" }}
         data-handletype="text"
       />
       {/* Text output */}
@@ -133,6 +173,15 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
               </p>
               <div className="absolute top-1 right-1 flex gap-1">
                 <button
+                  onClick={handleCopy}
+                  className="w-5 h-5 bg-neutral-900/80 hover:bg-neutral-700 rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
+                  title="Copy to clipboard"
+                >
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M7 6V3C7 2.44772 7.44772 2 8 2H20C20.5523 2 21 2.44772 21 3V17C21 17.5523 20.5523 18 20 18H17V21C17 21.5523 16.5523 22 16 22H4C3.44772 22 3 21.5523 3 21V7C3 6.44772 3.44772 6 4 6H7ZM9 6H17V16H19V4H9V6ZM5 8V20H15V8H5Z" />
+                  </svg>
+                </button>
+                <button
                   onClick={handleRegenerate}
                   disabled={isRunning}
                   className="w-5 h-5 bg-neutral-900/80 hover:bg-blue-600/80 disabled:opacity-50 disabled:cursor-not-allowed rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
@@ -160,6 +209,29 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
               </span>
             </div>
           )}
+        </div>
+
+        {/* Instruction Input (Internal Prompt) */}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <label className="text-[9px] text-neutral-500 font-medium">Instruction</label>
+            <button
+              onClick={handleApplyPreset}
+              className="text-[9px] text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors"
+              title="Apply 'Image-to-Prompt' Preset"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+              </svg>
+              Auto-Prompt
+            </button>
+          </div>
+          <textarea
+            value={nodeData.instruction || ""}
+            onChange={handleInstructionChange}
+            placeholder="Enter instruction or use Auto-Prompt..."
+            className="w-full text-[10px] py-1 px-1.5 border border-neutral-700 rounded bg-neutral-900/50 focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300 resize-none h-[60px]"
+          />
         </div>
 
         {/* Provider selector */}
@@ -216,6 +288,6 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
           </select>
         </div>
       </div>
-    </BaseNode>
+    </BaseNode >
   );
 }

@@ -134,6 +134,7 @@ export interface NanoBananaNodeData extends BaseNodeData {
 // LLM Generate Node Data (Text Generation)
 export interface LLMGenerateNodeData extends BaseNodeData {
   inputPrompt: string | null;
+  instruction?: string; // Internal instruction when no external prompt is connected
   outputText: string | null;
   provider: LLMProvider;
   model: LLMModelType;
@@ -166,6 +167,7 @@ export interface SplitGridNodeData extends BaseNodeData {
 export interface OutputNodeData extends BaseNodeData {
   image: string | null;
 }
+
 
 // Union of all node data types
 export type WorkflowNodeData =
@@ -212,6 +214,7 @@ export interface GenerateResponse {
 // API Request/Response types for LLM Text Generation
 export interface LLMGenerateRequest {
   prompt: string;
+  images?: string[]; // Optional images for multimodal input
   provider: LLMProvider;
   model: LLMModelType;
   temperature?: number;

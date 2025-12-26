@@ -27,12 +27,12 @@ import {
   GroupColor,
 } from "@/types";
 import { useToast } from "@/components/Toast";
-import { 
-  saveNodeImageData, 
-  loadAllNodeImageData, 
-  deleteNodeImageData, 
+import {
+  saveNodeImageData,
+  loadAllNodeImageData,
+  deleteNodeImageData,
   clearAllNodeImageData,
-  NodeImagePayload 
+  NodeImagePayload
 } from "@/utils/imageCache";
 
 export type EdgeStyle = "angular" | "curved";
@@ -340,6 +340,37 @@ const saveSaveConfig = (config: WorkflowSaveConfig) => {
   const configs = loadSaveConfigs();
   configs[config.workflowId] = config;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
+};
+
+const extractJson = (text: string): any => {
+  try {
+    // 1. Try direct parse
+    return JSON.parse(text);
+  } catch {
+    try {
+      // 2. Try stripping markdown code blocks
+      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (jsonMatch && jsonMatch[1]) {
+        return JSON.parse(jsonMatch[1].trim());
+      }
+
+      // 3. Try finding anything that looks like a JSON object/array
+      const firstCurly = text.indexOf("{");
+      const lastCurly = text.lastIndexOf("}");
+      if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
+        return JSON.parse(text.substring(firstCurly, lastCurly + 1));
+      }
+
+      const firstSquare = text.indexOf("[");
+      const lastSquare = text.lastIndexOf("]");
+      if (firstSquare !== -1 && lastSquare !== -1 && lastSquare > firstSquare) {
+        return JSON.parse(text.substring(firstSquare, lastSquare + 1));
+      }
+    } catch {
+      // All extraction attempts failed
+    }
+  }
+  return null;
 };
 
 export { generateWorkflowId };
@@ -813,12 +844,12 @@ export const useWorkflowStore = create<WorkflowStore>()(
             nodes: state.nodes.map((node) =>
               node.groupId === groupId
                 ? {
-                    ...node,
-                    position: {
-                      x: node.position.x + delta.x,
-                      y: node.position.y + delta.y,
-                    },
-                  }
+                  ...node,
+                  position: {
+                    x: node.position.x + delta.x,
+                    y: node.position.y + delta.y,
+                  },
+                }
                 : node
             ) as WorkflowNode[],
             hasUnsavedChanges: true,
@@ -1028,9 +1059,20 @@ export const useWorkflowStore = create<WorkflowStore>()(
                     return;
                   }
 
+                  // If the text looks like JSON (often from LLM Generate), try to extract a prompt
+                  let finalPrompt = text;
+                  const extracted = extractJson(text);
+                  if (extracted) {
+                    // Try common fields for prompts
+                    const cand = extracted.generated_prompt || extracted.prompt || extracted.subject || extracted.description;
+                    if (cand) {
+                      finalPrompt = typeof cand === "string" ? cand : JSON.stringify(cand);
+                    }
+                  }
+
                   updateNodeData(node.id, {
                     inputImages: images,
-                    inputPrompt: text,
+                    inputPrompt: finalPrompt,
                     status: "loading",
                     error: null,
                   });
@@ -1040,7 +1082,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
                     const requestPayload = {
                       images,
-                      prompt: text,
+                      prompt: finalPrompt,
                       aspectRatio: nodeData.aspectRatio,
                       resolution: nodeData.resolution,
                       model: nodeData.model,
@@ -1076,11 +1118,22 @@ export const useWorkflowStore = create<WorkflowStore>()(
                     const result = await response.json();
 
                     if (result.success && result.image) {
+                    } else if (!result.success && result.error && result.error.includes("```json")) {
+                      // Attempt to recover if the error contains JSON but was flagged as text
+                      const extracted = extractJson(result.error);
+                      if (extracted) {
+                        // If it's a valid prompt object, we can't easily re-run here without risking infinite loops
+                        // but let's at least show a better error or a hint to the user.
+                        // Actually, the backend might have returned text instead of image because it failed to find a valid prompt.
+                      }
+                    }
+
+                    if (result.success && result.image) {
                       // Save the newly generated image to global history
                       get().addToGlobalHistory({
                         image: result.image,
                         timestamp: Date.now(),
-                        prompt: text,
+                        prompt: finalPrompt,
                         aspectRatio: nodeData.aspectRatio,
                         model: nodeData.model,
                       });
@@ -1099,7 +1152,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
                           body: JSON.stringify({
                             directoryPath: genPath,
                             image: result.image,
-                            prompt: text,
+                            prompt: finalPrompt,
                           }),
                         }).catch((err) => {
                           console.error("Failed to save generation:", err);
@@ -1136,19 +1189,27 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 }
 
                 case "llmGenerate": {
-                  const { text } = getConnectedInputs(node.id);
+                  const { text, images } = getConnectedInputs(node.id);
+                  const nodeData = node.data as LLMGenerateNodeData;
 
-                  if (!text) {
+                  // Use connected text, or internal instruction, or default if image exists
+                  let finalPrompt = text || nodeData.instruction;
+
+                  if (!finalPrompt && images && images.length > 0) {
+                    finalPrompt = "Identify this image";
+                  }
+
+                  if (!finalPrompt) {
                     updateNodeData(node.id, {
                       status: "error",
-                      error: "Missing text input",
+                      error: "Missing text input or instruction",
                     });
                     set({ isRunning: false, currentNodeId: null });
                     return;
                   }
 
                   updateNodeData(node.id, {
-                    inputPrompt: text,
+                    inputPrompt: finalPrompt,
                     status: "loading",
                     error: null,
                   });
@@ -1159,7 +1220,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        prompt: text,
+                        prompt: finalPrompt,
+                        images: images, // Pass connected images
                         provider: nodeData.provider,
                         model: nodeData.model,
                         temperature: nodeData.temperature,
@@ -1337,6 +1399,17 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 return;
               }
 
+              // If the text looks like JSON (often from LLM Generate), try to extract a prompt
+              let finalPrompt = text;
+              const extracted = extractJson(text);
+              if (extracted) {
+                // Try common fields for prompts
+                const cand = extracted.generated_prompt || extracted.prompt || extracted.subject || extracted.description;
+                if (cand) {
+                  finalPrompt = typeof cand === "string" ? cand : JSON.stringify(cand);
+                }
+              }
+
               updateNodeData(nodeId, {
                 status: "loading",
                 error: null,
@@ -1347,7 +1420,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   images,
-                  prompt: text,
+                  prompt: finalPrompt,
                   aspectRatio: nodeData.aspectRatio,
                   resolution: nodeData.resolution,
                   model: nodeData.model,
@@ -1411,12 +1484,22 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
               // Always get fresh connected input first, fall back to stored input only if not connected
               const inputs = getConnectedInputs(nodeId);
-              const text = inputs.text ?? nodeData.inputPrompt;
+              let text = inputs.text ?? nodeData.inputPrompt;
+              const images = inputs.images; // Get connected images
+
+              // Use connected/stored text, or internal instruction
+              if (!text && nodeData.instruction) {
+                text = nodeData.instruction;
+              }
+
+              if (!text && images && images.length > 0) {
+                text = "Identify this image";
+              }
 
               if (!text) {
                 updateNodeData(nodeId, {
                   status: "error",
-                  error: "Missing text input",
+                  error: "Missing text input or instruction",
                 });
                 set({ isRunning: false, currentNodeId: null });
                 return;
@@ -1432,6 +1515,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   prompt: text,
+                  images: images, // Pass connected images
                   provider: nodeData.provider,
                   model: nodeData.model,
                   temperature: nodeData.temperature,
@@ -1779,8 +1863,8 @@ export const useWorkflowStore = create<WorkflowStore>()(
         if (typeof window === 'undefined') {
           return {
             getItem: () => null,
-            setItem: () => {},
-            removeItem: () => {},
+            setItem: () => { },
+            removeItem: () => { },
           };
         }
         return localStorage;

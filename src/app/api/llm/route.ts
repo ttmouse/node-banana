@@ -64,6 +64,7 @@ const extractGoogleText = (response: any): ExtractedGoogleResult => {
 
 async function generateWithGoogle(
   prompt: string,
+  images: string[] | undefined,
   model: LLMModelType,
   temperature: number,
   maxTokens: number
@@ -77,13 +78,47 @@ async function generateWithGoogle(
   const modelId = GOOGLE_MODEL_MAP[model];
   let targetTokens = Math.min(maxTokens, GOOGLE_MAX_OUTPUT_TOKENS);
 
+  // Prepare content parts - images first logic
+  const parts: any[] = [];
+
+  // Add images if present
+  if (images && images.length > 0) {
+    console.log(`[LLM] Processing ${images.length} images for generation`);
+
+    images.forEach((image, index) => {
+      let mimeType = "image/png";
+      let data = image;
+
+      if (image.includes("base64,")) {
+        const [header, base64Data] = image.split("base64,");
+        const mimeMatch = header.match(/data:([^;]+)/);
+        if (mimeMatch) mimeType = mimeMatch[1];
+        data = base64Data;
+      }
+
+      console.log(`[LLM] Image ${index + 1}: ${mimeType}, size=${(data.length / 1024).toFixed(2)}KB`);
+
+      parts.push({
+        inlineData: {
+          mimeType,
+          data
+        }
+      });
+    });
+  }
+
+  // Add text prompt last to ensure it's treated as the question/instruction about the context
+  parts.push({ text: prompt });
+
+  console.log(`[LLM] Final parts structure: ${parts.length} items (images + 1 text)`);
+
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await ai.models.generateContent({
       model: modelId,
       contents: [
         {
           role: "user",
-          parts: [{ text: prompt }],
+          parts: parts,
         },
       ],
       config: {
@@ -167,6 +202,7 @@ export async function POST(request: NextRequest) {
     const body: LLMGenerateRequest = await request.json();
     const {
       prompt,
+      images,
       provider,
       model,
       temperature = 0.7,
@@ -183,8 +219,23 @@ export async function POST(request: NextRequest) {
     let text: string;
 
     if (provider === "google") {
-      text = await generateWithGoogle(prompt, model, temperature, maxTokens);
+      text = await generateWithGoogle(prompt, images, model, temperature, maxTokens);
     } else if (provider === "openai") {
+      // OpenAI implementation now supports images roughly via this helper if updated
+      // but for now let's just use text or throw if image presence needs distinct handling
+      // For simplicity, we just pass through to generateWithOpenAI which currently is text-only in this implemented function
+      // If we wanted to support GPT-4V, we'd need to update generateWithOpenAI too.
+      // Keeping the check for now:
+      if (images && images.length > 0) {
+        // GPT-4o supports images natively, but our generateWithOpenAI helper needs update.
+        // For this task, we focus on Google fix. 
+        // Let's relax the check for gpt-4o but warn/error if the helper isn't ready.
+        // Actually, let's keep it safe:
+        return NextResponse.json<LLMGenerateResponse>(
+          { success: false, error: "Image input currently optimized for Google Gemini models only." },
+          { status: 400 }
+        );
+      }
       text = await generateWithOpenAI(prompt, model, temperature, maxTokens);
     } else {
       return NextResponse.json<LLMGenerateResponse>(
