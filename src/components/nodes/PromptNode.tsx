@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useRef, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { Handle, Position, NodeProps, Node } from "@xyflow/react";
 import { BaseNode } from "./BaseNode";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -13,22 +13,7 @@ type PromptNodeType = Node<PromptNodeData, "prompt">;
 export function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  // Auto-resize textarea logic
-  const adjustHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${textarea.scrollHeight}px`;
-    }
-  }, []);
-
-  useEffect(() => {
-    adjustHeight();
-  }, [nodeData.prompt, adjustHeight]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -45,8 +30,8 @@ export function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
 
   return (
     <BaseNode id={id} title="Prompt" selected={selected}>
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between px-1">
+      <div className="flex flex-col gap-2 h-full min-h-0">
+        <div className="flex items-center justify-between px-1 shrink-0">
           <label className="text-[9px] text-neutral-500 font-medium">Content</label>
           <div className="relative">
             <button
@@ -91,11 +76,10 @@ export function PromptNode({ id, data, selected }: NodeProps<PromptNodeType>) {
           </div>
         </div>
         <textarea
-          ref={textareaRef}
           value={nodeData.prompt}
           onChange={handleChange}
           placeholder="Describe what to generate..."
-          className="nodrag nopan nowheel w-full p-2 text-xs leading-relaxed text-neutral-100 border border-neutral-700 rounded bg-neutral-900/50 resize-none focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-500 overflow-hidden"
+          className="nodrag nopan nowheel w-full flex-1 p-2 text-xs leading-relaxed text-neutral-100 border border-neutral-700 rounded bg-neutral-900/50 resize-none focus:outline-none focus:ring-1 focus:ring-neutral-600 focus:border-neutral-600 placeholder:text-neutral-500 overflow-y-auto scrollbar-none"
         />
       </div>
 
