@@ -129,12 +129,13 @@ export interface NanoBananaNodeData extends BaseNodeData {
   useGoogleSearch: boolean; // Only available for Nano Banana Pro
   status: NodeStatus;
   error: string | null;
+  imageHistory?: string[]; // History of all generated images
+  historyIndex?: number;  // Currently viewed index in history
 }
 
 // LLM Generate Node Data (Text Generation)
 export interface LLMGenerateNodeData extends BaseNodeData {
   inputPrompt: string | null;
-  instruction?: string; // Internal instruction when no external prompt is connected
   outputText: string | null;
   provider: LLMProvider;
   model: LLMModelType;

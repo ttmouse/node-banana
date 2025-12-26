@@ -17,7 +17,6 @@ import {
   AnnotationNodeData,
   PromptNodeData,
   NanoBananaNodeData,
-  LLMGenerateNodeData,
   SplitGridNodeData,
   OutputNodeData,
   WorkflowNodeData,
@@ -26,6 +25,7 @@ import {
   NodeGroup,
   GroupColor,
 } from "@/types";
+import { LLMGenerateNodeData, LLMProvider, LLMModelType } from "@/types";
 import { useToast } from "@/components/Toast";
 import {
   saveNodeImageData,
@@ -186,7 +186,7 @@ interface WorkflowStore {
 
   // Helpers
   getNodeById: (id: string) => WorkflowNode | undefined;
-  getConnectedInputs: (nodeId: string) => { images: string[]; text: string | null };
+  getConnectedInputs: (nodeId: string) => { images: string[]; texts: string[] };
   validateWorkflow: () => { valid: boolean; errors: string[] };
 
   // Global Image History
@@ -872,7 +872,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
         getConnectedInputs: (nodeId: string) => {
           const { edges, nodes } = get();
           const images: string[] = [];
-          let text: string | null = null;
+          const texts: string[] = [];
 
           edges
             .filter((edge) => edge.target === nodeId)
@@ -897,15 +897,20 @@ export const useWorkflowStore = create<WorkflowStore>()(
               }
 
               if (handleId === "text") {
+                let nodeText: string | null = null;
                 if (sourceNode.type === "prompt") {
-                  text = (sourceNode.data as PromptNodeData).prompt;
+                  nodeText = (sourceNode.data as PromptNodeData).prompt;
                 } else if (sourceNode.type === "llmGenerate") {
-                  text = (sourceNode.data as LLMGenerateNodeData).outputText;
+                  nodeText = (sourceNode.data as LLMGenerateNodeData).outputText;
+                }
+
+                if (nodeText) {
+                  texts.push(nodeText);
                 }
               }
             });
 
-          return { images, text };
+          return { images, texts };
         },
 
         validateWorkflow: () => {
@@ -1047,7 +1052,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   break;
 
                 case "nanoBanana": {
-                  const { images, text } = getConnectedInputs(node.id);
+                  const { texts, images } = getConnectedInputs(node.id);
+                  const nodeData = node.data as NanoBananaNodeData;
+                  const text = texts.length > 0 ? texts.join("\n\n") : null;
 
                   // Only text input is required, image is optional
                   if (!text) {
@@ -1137,9 +1144,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
                         aspectRatio: nodeData.aspectRatio,
                         model: nodeData.model,
                       });
+                      const currentHistory = (node.data as NanoBananaNodeData).imageHistory || [];
+                      const newHistory = [...currentHistory, result.image];
                       updateNodeData(node.id, {
                         outputImage: result.image,
-                        status: "complete",
+                        imageHistory: newHistory,
+                        historyIndex: newHistory.length - 1,
+                        status: "done",
                         error: null,
                       });
 
@@ -1189,11 +1200,12 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 }
 
                 case "llmGenerate": {
-                  const { text, images } = getConnectedInputs(node.id);
+                  const { texts, images } = getConnectedInputs(node.id);
                   const nodeData = node.data as LLMGenerateNodeData;
 
-                  // Use connected text, or internal instruction, or default if image exists
-                  let finalPrompt = text || nodeData.instruction;
+                  // Use connected text or default if image exists
+                  const connectedText = texts.length > 0 ? texts.join("\n\n") : null;
+                  let finalPrompt = connectedText;
 
                   if (!finalPrompt && images && images.length > 0) {
                     finalPrompt = "Identify this image";
@@ -1202,7 +1214,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   if (!finalPrompt) {
                     updateNodeData(node.id, {
                       status: "error",
-                      error: "Missing text input or instruction",
+                      error: "Missing text input (Connect a Prompt node)",
                     });
                     set({ isRunning: false, currentNodeId: null });
                     return;
@@ -1274,9 +1286,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 }
 
                 case "splitGrid": {
-                  const { images } = getConnectedInputs(node.id);
-                  const sourceImage = images[0] || null;
-
+                  const { texts, images } = getConnectedInputs(node.id);
+                  const sourceImage = images[0] || (node.data as SplitGridNodeData).sourceImage;
+                  const prompt = texts[0] || (node.data as SplitGridNodeData).defaultPrompt;
                   if (!sourceImage) {
                     updateNodeData(node.id, {
                       status: "error",
@@ -1387,7 +1399,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
               // Always get fresh connected inputs first, fall back to stored inputs only if not connected
               const inputs = getConnectedInputs(nodeId);
               let images = inputs.images.length > 0 ? inputs.images : nodeData.inputImages;
-              let text = inputs.text ?? nodeData.inputPrompt;
+              let text = inputs.texts.length > 0 ? inputs.texts.join("\n\n") : nodeData.inputPrompt;
 
               // Only text input is required, image is optional
               if (!text) {
@@ -1484,13 +1496,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
 
               // Always get fresh connected input first, fall back to stored input only if not connected
               const inputs = getConnectedInputs(nodeId);
-              let text = inputs.text ?? nodeData.inputPrompt;
+              const connectedText = inputs.texts.length > 0 ? inputs.texts.join("\n\n") : null;
+              let text = connectedText ?? nodeData.inputPrompt;
               const images = inputs.images; // Get connected images
-
-              // Use connected/stored text, or internal instruction
-              if (!text && nodeData.instruction) {
-                text = nodeData.instruction;
-              }
 
               if (!text && images && images.length > 0) {
                 text = "Identify this image";
@@ -1499,7 +1507,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
               if (!text) {
                 updateNodeData(nodeId, {
                   status: "error",
-                  error: "Missing text input or instruction",
+                  error: "Missing text input (Connect a Prompt node)",
                 });
                 set({ isRunning: false, currentNodeId: null });
                 return;

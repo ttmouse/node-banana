@@ -58,8 +58,30 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
   );
 
   const handleClearImage = useCallback(() => {
-    updateNodeData(id, { outputImage: null, status: "idle", error: null });
+    updateNodeData(id, { outputImage: null, imageHistory: [], historyIndex: 0, status: "idle", error: null });
   }, [id, updateNodeData]);
+
+  const handlePrevHistory = useCallback(() => {
+    if (!nodeData.imageHistory || nodeData.imageHistory.length <= 1) return;
+    const newIndex = (nodeData.historyIndex ?? 0) > 0
+      ? (nodeData.historyIndex ?? 0) - 1
+      : nodeData.imageHistory.length - 1;
+    updateNodeData(id, {
+      historyIndex: newIndex,
+      outputImage: nodeData.imageHistory[newIndex]
+    });
+  }, [id, nodeData.imageHistory, nodeData.historyIndex, updateNodeData]);
+
+  const handleNextHistory = useCallback(() => {
+    if (!nodeData.imageHistory || nodeData.imageHistory.length <= 1) return;
+    const newIndex = (nodeData.historyIndex ?? 0) < nodeData.imageHistory.length - 1
+      ? (nodeData.historyIndex ?? 0) + 1
+      : 0;
+    updateNodeData(id, {
+      historyIndex: newIndex,
+      outputImage: nodeData.imageHistory[newIndex]
+    });
+  }, [id, nodeData.imageHistory, nodeData.historyIndex, updateNodeData]);
 
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
   const isRunning = useWorkflowStore((state) => state.isRunning);
@@ -69,6 +91,7 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
   }, [id, regenerateNode]);
 
   const isNanoBananaPro = nodeData.model === "nano-banana-pro";
+  const hasHistory = nodeData.imageHistory && nodeData.imageHistory.length > 1;
 
   return (
     <>
@@ -106,12 +129,40 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
         <div className="flex-1 flex flex-col min-h-0 gap-2">
           {/* Preview area */}
           {nodeData.outputImage ? (
-            <div className="relative w-full flex-1 min-h-0">
+            <div className="relative w-full flex-1 min-h-0 group">
               <img
                 src={nodeData.outputImage}
                 alt="Generated"
                 className="w-full h-full object-contain rounded"
               />
+
+              {/* History Navigation Overlays */}
+              {hasHistory && (
+                <>
+                  <button
+                    onClick={handlePrevHistory}
+                    className="absolute left-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-black/50 hover:bg-black/80 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Previous Generation"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={handleNextHistory}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-black/50 hover:bg-black/80 rounded-full flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Next Generation"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                  <div className="absolute bottom-1 left-1/2 -translate-x-1/2 bg-black/60 rounded px-1.5 py-0.5 text-[8px] text-white font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    {(nodeData.historyIndex ?? 0) + 1} / {nodeData.imageHistory?.length}
+                  </div>
+                </>
+              )}
+
               {/* Loading overlay */}
               {nodeData.status === "loading" && (
                 <div className="absolute inset-0 bg-neutral-900/70 rounded flex items-center justify-center">
@@ -232,9 +283,8 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
                 value={nodeData.resolution}
                 onChange={handleResolutionChange}
                 disabled={nodeData.aspectRatio === "original"}
-                className={`w-12 text-[10px] py-1 px-1.5 border border-neutral-700 rounded bg-neutral-900/50 focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300 ${
-                  nodeData.aspectRatio === "original" ? "opacity-50 cursor-not-allowed" : ""
-                }`}
+                className={`w-12 text-[10px] py-1 px-1.5 border border-neutral-700 rounded bg-neutral-900/50 focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300 ${nodeData.aspectRatio === "original" ? "opacity-50 cursor-not-allowed" : ""
+                  }`}
               >
                 {RESOLUTIONS.map((res) => (
                   <option key={res} value={res}>
@@ -259,10 +309,10 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
           )}
         </div>
       </BaseNode>
-      
+
       {/* Full size image preview modal using React Portal */}
       {isPreviewModalOpen && nodeData.outputImage && createPortal(
-        <div 
+        <div
           className="fixed inset-0 z-[9999] bg-black flex items-center justify-center"
           onClick={() => setIsPreviewModalOpen(false)}
         >
@@ -279,7 +329,7 @@ export function NanoBananaNode({ id, data, selected }: NodeProps<NanoBananaNodeT
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
-          
+
           {/* Full screen image container */}
           <img
             src={nodeData.outputImage}
