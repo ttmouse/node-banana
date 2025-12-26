@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useCallback } from "react";
+import { ReactNode, useCallback, KeyboardEvent, useState, useRef, useEffect } from "react";
 import { NodeResizer, OnResize, useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
 
@@ -28,8 +28,13 @@ export function BaseNode({
   minHeight = 100,
 }: BaseNodeProps) {
   const currentNodeId = useWorkflowStore((state) => state.currentNodeId);
+  const isRunning = useWorkflowStore((state) => state.isRunning);
+  const executeWorkflow = useWorkflowStore((state) => state.executeWorkflow);
+  const spaceBarPressed = useWorkflowStore((state) => state.spaceBarPressed);
   const isCurrentlyExecuting = currentNodeId === id;
   const { getNodes, setNodes } = useReactFlow();
+  const [isHovered, setIsHovered] = useState(false);
+  const nodeRef = useRef<HTMLDivElement>(null);
 
   // Synchronize resize across all selected nodes
   const handleResize: OnResize = useCallback(
@@ -59,10 +64,40 @@ export function BaseNode({
     [id, getNodes, setNodes]
   );
 
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "Enter" || event.target !== event.currentTarget || !selected || isRunning) {
+        return;
+      }
+
+      event.preventDefault();
+      // Execute workflow from this node onwards (mode 2: "Run from selected node")
+      executeWorkflow(id);
+    },
+    [selected, isRunning, executeWorkflow, id]
+  );
+
+  const handleMouseEnter = useCallback(() => {
+    if (!spaceBarPressed) {
+      setIsHovered(true);
+    }
+  }, [spaceBarPressed]);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsHovered(false);
+  }, []);
+
+  // Auto-focus when node is selected to enable Enter key shortcut
+  useEffect(() => {
+    if (selected && nodeRef.current) {
+      nodeRef.current.focus();
+    }
+  }, [selected]);
+
   return (
     <>
       <NodeResizer
-        isVisible={selected}
+        isVisible
         minWidth={minWidth}
         minHeight={minHeight}
         lineClassName="!border-transparent"
@@ -70,14 +105,35 @@ export function BaseNode({
         onResize={handleResize}
       />
       <div
+        ref={nodeRef}
         className={`
-          bg-neutral-800 rounded-md shadow-lg border h-full w-full
-          ${isCurrentlyExecuting || isExecuting ? "border-blue-500 ring-1 ring-blue-500/20" : "border-neutral-700"}
-          ${hasError ? "border-red-500" : ""}
-          ${selected ? "border-blue-500 ring-2 ring-blue-500/40 shadow-lg shadow-blue-500/25" : ""}
+          bg-neutral-800 rounded-md shadow-lg h-full w-full relative overflow-visible
           ${className}
         `}
+        style={{
+          cursor: spaceBarPressed ? 'grab' : (isHovered ? 'pointer' : 'default')
+        }}
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
+        {/* Fixed-width border using CSS calc with zoom variable - only render when needed */}
+        {(isCurrentlyExecuting || isExecuting || hasError || selected || (isHovered && !selected && !spaceBarPressed)) && (
+          <div
+            className="fixed-width-border absolute inset-0 pointer-events-none rounded-md"
+            style={{
+              // Use CSS variables for dynamic calculation
+              '--border-width': isCurrentlyExecuting || isExecuting || hasError || selected ? '2' : '1',
+              '--border-color':
+                isCurrentlyExecuting || isExecuting ? 'rgb(59 130 246)' :
+                hasError ? 'rgb(239 68 68)' :
+                selected ? 'rgb(251 191 36)' :
+                'rgb(163 163 163)',
+              zIndex: 10,
+            } as React.CSSProperties}
+          />
+        )}
         <div className="px-3 pt-2 pb-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{title}</span>
         </div>

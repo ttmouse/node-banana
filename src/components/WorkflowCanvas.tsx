@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useRef, useState, useEffect, DragEvent, useMemo } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  useEffect,
+  DragEvent,
+  useMemo,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   ReactFlow,
   Background,
@@ -13,10 +21,11 @@ import {
   useReactFlow,
   OnConnectEnd,
   Node,
+  SelectionMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { useWorkflowStore, WorkflowFile } from "@/store/workflowStore";
+import { useWorkflowStore, WorkflowFile, restoreImagesFromCache } from "@/store/workflowStore";
 import {
   ImageInputNode,
   AnnotationNode,
@@ -117,14 +126,56 @@ const isMouseWheel = (event: WheelEvent): boolean => {
 };
 
 export function WorkflowCanvas() {
-  const { nodes, edges, groups, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory, setNodeGroupId, regenerateNode } =
+  const { nodes, edges, groups, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory, setNodeGroupId, regenerateNode, undo, redo, spaceBarPressed, setSpaceBarPressed } =
     useWorkflowStore();
-  const { screenToFlowPosition, getViewport, zoomIn, zoomOut, setViewport } = useReactFlow();
+  const { screenToFlowPosition, getViewport, zoomIn, zoomOut, setViewport, fitView } = useReactFlow();
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropType, setDropType] = useState<"image" | "workflow" | "node" | null>(null);
   const [connectionDrop, setConnectionDrop] = useState<ConnectionDropState | null>(null);
   const [isSplitting, setIsSplitting] = useState(false);
+  const [currentZoom, setCurrentZoom] = useState(getViewport().zoom);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const zoomTimeoutRef = useRef<number | null>(null);
+
+  // Rehydrate persisted state on client mount
+  useEffect(() => {
+    useWorkflowStore.persist.rehydrate();
+    // Restore images from IndexedDB after a short delay to ensure rehydration is complete
+    setTimeout(() => {
+      restoreImagesFromCache();
+    }, 100);
+  }, []);
+
+  // Track zoom changes with immediate CSS variable update
+  const onViewportChange = useCallback((event: any) => {
+    const newZoom = event.zoom || getViewport().zoom;
+
+    // Update CSS variable immediately during zoom
+    document.documentElement.style.setProperty('--zoom-level', newZoom.toString());
+
+    // Clear any pending timeout
+    if (zoomTimeoutRef.current !== null) {
+      clearTimeout(zoomTimeoutRef.current);
+    }
+
+    // Update state after a short delay to stabilize
+    zoomTimeoutRef.current = window.setTimeout(() => {
+      if (Math.abs(newZoom - currentZoom) > 0.01) {
+        setCurrentZoom(newZoom);
+      }
+    }, 50);
+  }, [getViewport, currentZoom]);
+
+  // Set initial zoom
+  useEffect(() => {
+    const initialZoom = getViewport().zoom;
+    setCurrentZoom(initialZoom);
+    document.documentElement.style.setProperty('--zoom-level', initialZoom.toString());
+  }, [getViewport]);
+
+  const handlePaneContextMenu = useCallback((event: ReactMouseEvent | MouseEvent) => {
+    event.preventDefault();
+  }, []);
 
   // Just pass regular nodes to React Flow - groups are rendered separately
   const allNodes = useMemo(() => {
@@ -520,15 +571,15 @@ export function WorkflowCanvas() {
 
   // Custom wheel handler for macOS trackpad support
   const handleWheel = useCallback((event: React.WheelEvent) => {
-    // Pinch gesture (ctrlKey) always zooms
-    if (event.ctrlKey) {
+    // Pinch gesture (ctrlKey) or Cmd/Ctrl key held down always zooms
+    if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       if (event.deltaY < 0) zoomIn();
       else zoomOut();
       return;
     }
 
-    // On macOS, differentiate trackpad from mouse
+    // On macOS, differentiate trackpad from mouse (only when no modifier keys)
     if (isMacOS) {
       const nativeEvent = event.nativeEvent;
       if (isMouseWheel(nativeEvent)) {
@@ -567,6 +618,48 @@ export function WorkflowCanvas() {
         event.target instanceof HTMLTextAreaElement
       ) {
         return;
+      }
+
+      // Space bar for canvas panning
+      if (event.code === 'Space' && !event.repeat) {
+        event.preventDefault();
+        setSpaceBarPressed(true);
+      }
+
+      // Zoom and undo/redo shortcuts
+      if ((event.metaKey || event.ctrlKey)) {
+        switch (event.key) {
+          case '0':
+            event.preventDefault();
+            fitView({ duration: 300 });
+            return;
+          case '1':
+          case 'İ': // Handle ⇧ + 1 on some keyboards
+            event.preventDefault();
+            setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 300 });
+            return;
+          case '=':
+          case '+':
+          case '˝': // Handle ⇧ + = on some keyboards
+            event.preventDefault();
+            zoomIn({ duration: 200 });
+            return;
+          case '-':
+          case '˜': // Handle ⇧ + - on some keyboards
+            event.preventDefault();
+            zoomOut({ duration: 200 });
+            return;
+          case 'z':
+            event.preventDefault();
+            if (event.shiftKey) {
+              // Redo (Ctrl+Shift+Z or Cmd+Shift+Z)
+              redo();
+            } else {
+              // Undo (Ctrl+Z or Cmd+Z)
+              undo();
+            }
+            return;
+        }
       }
 
       // Handle copy (Ctrl/Cmd + C)
@@ -781,9 +874,39 @@ export function WorkflowCanvas() {
       }
     };
 
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') {
+        event.preventDefault();
+        setSpaceBarPressed(false);
+      }
+    };
+
+    // Add mouse down/up handlers to update cursor during dragging
+    const handleMouseDown = () => {
+      if (spaceBarPressed) {
+        document.body.style.cursor = 'grabbing';
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (spaceBarPressed) {
+        document.body.style.cursor = 'grab';
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData]);
+    window.addEventListener("keyup", handleKeyUp);
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+    };
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, spaceBarPressed, fitView, setViewport, zoomIn, zoomOut, undo, redo]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -961,6 +1084,18 @@ export function WorkflowCanvas() {
         </div>
       )}
 
+      {/* Space bar pressed indicator */}
+      {spaceBarPressed && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
+          <div className="bg-neutral-800/90 border border-neutral-600 rounded-lg px-4 py-2 shadow-xl flex items-center gap-2">
+            <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+            <p className="text-neutral-200 text-sm font-medium">按住空格键拖动画布</p>
+          </div>
+        </div>
+      )}
+
       {/* Splitting indicator */}
       {isSplitting && (
         <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center">
@@ -979,15 +1114,18 @@ export function WorkflowCanvas() {
         onConnect={handleConnect}
         onConnectEnd={handleConnectEnd}
         onNodeDragStop={handleNodeDragStop}
+        onMove={onViewportChange}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         isValidConnection={isValidConnection}
         fitView
         deleteKeyCode={["Backspace", "Delete"]}
         multiSelectionKeyCode="Shift"
-        selectionOnDrag={isMacOS}
-        panOnDrag={!isMacOS}
+        selectionOnDrag
+        selectionMode={SelectionMode.Partial}
+        panOnDrag={spaceBarPressed ? true : [2]}
         selectNodesOnDrag={false}
+        nodesDraggable={!spaceBarPressed}
         nodeDragThreshold={5}
         zoomOnScroll={false}
         zoomOnPinch={true}
@@ -996,8 +1134,9 @@ export function WorkflowCanvas() {
         className="bg-neutral-900"
         defaultEdgeOptions={{
           type: "editable",
-          animated: false,
+          animated: true,
         }}
+        onPaneContextMenu={handlePaneContextMenu}
       >
         <GroupBackgroundsPortal />
         <GroupControlsOverlay />
