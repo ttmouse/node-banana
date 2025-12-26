@@ -127,9 +127,9 @@ export function BaseNode({
               '--border-width': isCurrentlyExecuting || isExecuting || hasError || selected ? '2' : '1',
               '--border-color':
                 isCurrentlyExecuting || isExecuting ? 'rgb(59 130 246)' :
-                hasError ? 'rgb(239 68 68)' :
-                selected ? 'rgb(251 191 36)' :
-                'rgb(163 163 163)',
+                  hasError ? 'rgb(239 68 68)' :
+                    selected ? 'rgb(251 191 36)' :
+                      'rgb(163 163 163)',
               zIndex: 10,
             } as React.CSSProperties}
           />
@@ -137,7 +137,7 @@ export function BaseNode({
         <div className="px-3 pt-2 pb-1">
           <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">{title}</span>
         </div>
-        <div className="px-3 pb-4 h-[calc(100%-28px)] overflow-hidden flex flex-col">{children}</div>
+        <div className="px-3 pb-4 h-[calc(100%-28px)] overflow-hidden flex flex-col nodrag nopan nowheel">{children}</div>
       </div>
     </>
   );
