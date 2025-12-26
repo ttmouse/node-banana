@@ -126,7 +126,7 @@ const isMouseWheel = (event: WheelEvent): boolean => {
 };
 
 export function WorkflowCanvas() {
-  const { nodes, edges, groups, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory, setNodeGroupId, regenerateNode, undo, redo, spaceBarPressed, setSpaceBarPressed } =
+  const { nodes, edges, groups, onNodesChange, onEdgesChange, onConnect, addNode, updateNodeData, loadWorkflow, getNodeById, addToGlobalHistory, setNodeGroupId, regenerateNode, executeWorkflow, undo, redo, spaceBarPressed, setSpaceBarPressed } =
     useWorkflowStore();
   const { screenToFlowPosition, getViewport, zoomIn, zoomOut, setViewport, fitView } = useReactFlow();
   const [isDragOver, setIsDragOver] = useState(false);
@@ -662,6 +662,16 @@ export function WorkflowCanvas() {
         }
       }
 
+      // Handle Enter to execute (from selected node)
+      if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        const selectedNodes = nodes.filter((node) => node.selected);
+        if (selectedNodes.length === 1) {
+          executeWorkflow(selectedNodes[0].id);
+          return;
+        }
+      }
+
       // Handle copy (Ctrl/Cmd + C)
       if ((event.ctrlKey || event.metaKey) && event.key === "c") {
         event.preventDefault();
@@ -1134,7 +1144,7 @@ export function WorkflowCanvas() {
         className="bg-neutral-900"
         defaultEdgeOptions={{
           type: "editable",
-          animated: true,
+          animated: false,
         }}
         onPaneContextMenu={handlePaneContextMenu}
       >

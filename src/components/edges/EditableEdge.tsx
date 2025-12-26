@@ -9,7 +9,7 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { NanoBananaNodeData, WorkflowEdgeData } from "@/types";
+import { NanoBananaNodeData, LLMGenerateNodeData, SplitGridNodeData, WorkflowEdgeData } from "@/types";
 
 interface EdgeData extends WorkflowEdgeData {
   offsetX?: number;
@@ -52,12 +52,26 @@ export function EditableEdge({
   const hasPause = edgeData?.hasPause ?? false;
 
   // Check if target node is a Generate node that's currently loading
+  // Check if target node is an executable node that's currently loading
   const isTargetLoading = useMemo(() => {
     const targetNode = nodes.find((n) => n.id === target);
-    if (targetNode?.type === "nanoBanana") {
+    if (!targetNode) return false;
+
+    if (targetNode.type === "nanoBanana") {
       const nodeData = targetNode.data as NanoBananaNodeData;
       return nodeData.status === "loading";
     }
+
+    if (targetNode.type === "llmGenerate") {
+      const nodeData = targetNode.data as LLMGenerateNodeData;
+      return nodeData.status === "loading";
+    }
+
+    if (targetNode.type === "splitGrid") {
+      const nodeData = targetNode.data as SplitGridNodeData;
+      return nodeData.status === "loading";
+    }
+
     return false;
   }, [target, nodes]);
 
