@@ -1,3 +1,9 @@
+// [IN]: @/types (WorkflowNode, WorkflowNodeData)
+// [OUT]: saveNodeImageData, loadNodeImageData, loadAllNodeImageData, deleteNodeImageData, clearAllNodeImageData
+// [POS]: IndexedDB persistence layer for node images / 节点图像的 IndexedDB 持久化层
+// Protocol: When updated, sync this header + parent .folder.md
+// 协议：更新本文件时，同步本头注释与上级 .folder.md
+
 "use client";
 
 import { WorkflowNode, WorkflowNodeData } from "@/types";

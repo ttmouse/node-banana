@@ -1,3 +1,9 @@
+// [IN]: zustand, @xyflow/react, @/types, @/components/Toast, @/utils/imageCache
+// [OUT]: useWorkflowStore (hook), generateWorkflowId, restoreImagesFromCache
+// [POS]: Central state orchestrator for workflow editor / 工作流编辑器的核心状态编排器
+// Protocol: When updated, sync this header + parent .folder.md
+// 协议：更新本文件时，同步本头注释与上级 .folder.md
+
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import {
@@ -1894,19 +1900,23 @@ export const useWorkflowStore = create<WorkflowStore>()(
         };
       },
       partialize: (state) => {
-        // Remove image data from nodes to save space
+        // Remove image data and large text outputs from nodes to save space
         const nodesWithoutImages = state.nodes.map((node) => {
           const nodeCopy = { ...node };
 
-          // Remove image data based on node type
+          // Remove image data and large outputs based on node type
           if (node.type === "imageInput") {
             nodeCopy.data = { ...node.data, image: null, filename: null, dimensions: null };
           } else if (node.type === "annotation") {
             nodeCopy.data = { ...node.data, sourceImage: null, outputImage: null };
           } else if (node.type === "nanoBanana") {
-            nodeCopy.data = { ...node.data, inputImages: [], outputImage: null };
+            // Also strip imageHistory which can grow very large with base64 images
+            nodeCopy.data = { ...node.data, inputImages: [], outputImage: null, imageHistory: [] };
           } else if (node.type === "output") {
             nodeCopy.data = { ...node.data, displayImage: null };
+          } else if (node.type === "splitGrid") {
+            // Strip sourceImage from splitGrid nodes
+            nodeCopy.data = { ...node.data, sourceImage: null };
           }
 
           return nodeCopy;

@@ -1,3 +1,9 @@
+// [IN]: next/server, @google/genai, @/types
+// [OUT]: POST handler (NextResponse<LLMGenerateResponse>)
+// [POS]: LLM text generation API (Google/OpenAI) / LLM 文本生成 API 端点
+// Protocol: When updated, sync this header + parent .folder.md
+// 协议：更新本文件时，同步本头注释与上级 .folder.md
+
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { LLMGenerateRequest, LLMGenerateResponse, LLMModelType } from "@/types";

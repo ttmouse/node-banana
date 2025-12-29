@@ -25,6 +25,20 @@ Node Banana is node-based workflow application for generating images with NBP. B
 - **Styling**: Tailwind CSS
 - **AI**: Google Gemini API, OpenAI API
 
+## Module Boundaries
+
+```
+src/
+├── app/           → Next.js routing & API endpoints
+├── components/    → React UI (nodes, edges, modals)
+├── store/         → Zustand state (workflow, annotation)
+├── utils/         → Utilities (imageCache, gridSplitter)
+├── types/         → TypeScript definitions
+└── constants/     → Application constants
+```
+
+> **Sync Protocol**: This project uses [Fractal Docs Protocol](./PROTOCOL.md). See `.folder.md` files in each directory for local maps.
+
 ## Getting Started
 
 ### Prerequisites

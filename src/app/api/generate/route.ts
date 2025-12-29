@@ -1,3 +1,9 @@
+// [IN]: next/server, @google/genai, @/types
+// [OUT]: POST handler (NextResponse<GenerateResponse>)
+// [POS]: Image generation API endpoint via Gemini / Gemini 图像生成 API 端点
+// Protocol: When updated, sync this header + parent .folder.md
+// 协议：更新本文件时，同步本头注释与上级 .folder.md
+
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { GenerateRequest, GenerateResponse, ModelType } from "@/types";
@@ -129,11 +135,11 @@ export async function POST(request: NextRequest) {
     // Make request to Gemini with retry logic for network errors
     console.log(`[API:${requestId}] Calling Gemini API...`);
     const geminiStartTime = Date.now();
-    
+
     let response;
     let retryCount = 0;
     const maxRetries = 3;
-    
+
     while (retryCount <= maxRetries) {
       try {
         if (retryCount > 0) {
@@ -142,7 +148,7 @@ export async function POST(request: NextRequest) {
           const waitTime = Math.pow(2, retryCount - 1) * 1000;
           await new Promise(resolve => setTimeout(resolve, waitTime));
         }
-        
+
         response = await ai.models.generateContent({
           model: MODEL_MAP[model],
           contents: [
@@ -154,20 +160,20 @@ export async function POST(request: NextRequest) {
           config,
           ...(tools.length > 0 && { tools }),
         });
-        
+
         // If we got here, the request succeeded
         break;
       } catch (fetchError: unknown) {
         retryCount++;
         const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
         console.error(`[API:${requestId}] Attempt ${retryCount} failed:`, errorMessage);
-        
+
         // Check if this is a network/fetch error that might be retriable
-        const isNetworkError = errorMessage.includes('fetch failed') || 
-                              errorMessage.includes('ECONNRESET') || 
-                              errorMessage.includes('ETIMEDOUT') || 
-                              errorMessage.includes('ENOTFOUND');
-        
+        const isNetworkError = errorMessage.includes('fetch failed') ||
+          errorMessage.includes('ECONNRESET') ||
+          errorMessage.includes('ETIMEDOUT') ||
+          errorMessage.includes('ENOTFOUND');
+
         if (retryCount > maxRetries || !isNetworkError) {
           // If we've exhausted retries or this isn't a network error, re-throw
           throw fetchError;
