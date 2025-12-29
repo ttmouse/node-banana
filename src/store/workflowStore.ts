@@ -84,12 +84,13 @@ const extractNodeImagePayload = (node: WorkflowNode): NodeImagePayload | null =>
     }
   } else if (node.type === "nanoBanana") {
     const data = node.data as NanoBananaNodeData;
-    if (data.outputImage || data.inputImages.length > 0) {
+    if (data.outputImage || data.inputImages.length > 0 || (data.imageHistory && data.imageHistory.length > 0)) {
       return {
         type: node.type,
         data: {
           outputImage: data.outputImage,
           inputImages: data.inputImages,
+          imageHistory: data.imageHistory,
         }
       };
     }
@@ -188,6 +189,7 @@ interface WorkflowStore {
   // Save/Load
   saveWorkflow: (name?: string) => void;
   loadWorkflow: (workflow: WorkflowFile) => Promise<void>;
+  exportPortableWorkflow: (name?: string) => Promise<void>;
   clearWorkflow: () => Promise<void>;
 
   // Helpers
@@ -1150,7 +1152,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
                         aspectRatio: nodeData.aspectRatio,
                         model: nodeData.model,
                       });
-                      const currentHistory = (node.data as NanoBananaNodeData).imageHistory || [];
+                      const currentNode = get().nodes.find((n) => n.id === node.id);
+                      const currentData = (currentNode?.data as NanoBananaNodeData) || nodeData;
+                      const currentHistory = currentData.imageHistory || [];
                       const newHistory = [...currentHistory, result.image];
                       updateNodeData(node.id, {
                         outputImage: result.image,
@@ -1161,19 +1165,35 @@ export const useWorkflowStore = create<WorkflowStore>()(
                       });
 
                       // Auto-save to generations folder if configured
+                      // This also updates the node with the file path for persistence
                       const genPath = get().generationsPath;
+                      console.log("[DEBUG executeWorkflow] generationsPath:", genPath);
                       if (genPath) {
-                        fetch("/api/save-generation", {
+                        console.log("[DEBUG executeWorkflow] Saving image to:", genPath);
+                        fetch("/api/save-image", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({
                             directoryPath: genPath,
                             image: result.image,
-                            prompt: finalPrompt,
                           }),
-                        }).catch((err) => {
-                          console.error("Failed to save generation:", err);
-                        });
+                        })
+                          .then((res) => res.json())
+                          .then((data) => {
+                            console.log("[DEBUG executeWorkflow] Save result:", data);
+                            if (data.success && data.path) {
+                              // Update outputImage to file path for persistence
+                              // Keep the base64 in memory for display, store path for saving
+                              updateNodeData(node.id, {
+                                outputImagePath: data.path,
+                              });
+                            }
+                          })
+                          .catch((err) => {
+                            console.error("Failed to save generation:", err);
+                          });
+                      } else {
+                        console.log("[DEBUG executeWorkflow] No generationsPath configured");
                       }
                     } else {
                       updateNodeData(node.id, {
@@ -1470,26 +1490,47 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   aspectRatio: nodeData.aspectRatio,
                   model: nodeData.model,
                 });
+                // Get fresh node data to ensure we have the latest history
+                const currentNode = get().nodes.find((n) => n.id === nodeId);
+                const currentData = (currentNode?.data as NanoBananaNodeData) || nodeData;
+                const currentHistory = currentData.imageHistory || [];
+                const newHistory = [...currentHistory, result.image];
+
                 updateNodeData(nodeId, {
                   outputImage: result.image,
+                  imageHistory: newHistory,
+                  historyIndex: newHistory.length - 1,
                   status: "complete",
                   error: null,
                 });
 
                 // Auto-save to generations folder if configured
                 const genPath = get().generationsPath;
+                console.log("[DEBUG] generationsPath:", genPath);
                 if (genPath) {
-                  fetch("/api/save-generation", {
+                  console.log("[DEBUG] Saving image to:", genPath);
+                  fetch("/api/save-image", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       directoryPath: genPath,
                       image: result.image,
-                      prompt: text,
                     }),
-                  }).catch((err) => {
-                    console.error("Failed to save generation:", err);
-                  });
+                  })
+                    .then((res) => res.json())
+                    .then((data) => {
+                      console.log("[DEBUG] Save result:", data);
+                      if (data.success && data.path) {
+                        updateNodeData(nodeId, {
+                          outputImagePath: data.path,
+                        });
+                      }
+                    })
+                    .catch((err) => {
+                      console.error("Failed to save generation:", err);
+                    });
+                } else {
+                  console.log("[DEBUG] No generationsPath configured, skipping auto-save");
                 }
               } else {
                 updateNodeData(nodeId, {
@@ -1638,10 +1679,80 @@ export const useWorkflowStore = create<WorkflowStore>()(
         saveWorkflow: (name?: string) => {
           const { nodes, edges, edgeStyle, groups } = get();
 
+          // Standard save: Strip base64 data if paths exist, to keep file size small
+          // This relies on local files being available (via outputImagePath)
+          const cleanNodes = nodes.map(node => {
+            if (node.type === 'nanoBanana' && (node.data as NanoBananaNodeData).outputImagePath) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  outputImage: null, // Remove base64, keep outputImagePath
+                  imageHistory: [], // Clear history base64 too
+                  inputImages: []   // Clear input base64
+                }
+              };
+            }
+            return node;
+          });
+
           const workflow: WorkflowFile = {
             version: 1,
             name: name || `workflow-${new Date().toISOString().slice(0, 10)}`,
-            nodes,
+            nodes: cleanNodes,
+            edges,
+            edgeStyle,
+            groups: Object.keys(groups).length > 0 ? groups : undefined,
+          };
+
+          const json = JSON.stringify(workflow, null, 2);
+          const blob = new Blob([json], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${workflow.name}.json`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        },
+
+        exportPortableWorkflow: async (name?: string) => {
+          const { nodes, edges, edgeStyle, groups } = get();
+
+          // Portable export: Ensure all images are embedded as base64
+          // If we have paths but no base64, we need to load them
+          const portableNodes = await Promise.all(nodes.map(async (node) => {
+            if (node.type === 'nanoBanana') {
+              const data = node.data as NanoBananaNodeData;
+              // If we have a path but no image (or want to ensure it's fresh), load it
+              if (data.outputImagePath && !data.outputImage) {
+                try {
+                  const res = await fetch('/api/load-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: data.outputImagePath })
+                  });
+                  const result = await res.json();
+                  if (result.success && result.image) {
+                    return {
+                      ...node,
+                      data: { ...data, outputImage: result.image }
+                    };
+                  }
+                } catch (e) {
+                  console.error("Failed to load image for export:", e);
+                }
+              }
+            }
+            return node;
+          }));
+
+          const workflow: WorkflowFile = {
+            version: 1,
+            name: name ? `${name}-portable` : `workflow-portable-${new Date().toISOString().slice(0, 10)}`,
+            nodes: portableNodes,
             edges,
             edgeStyle,
             groups: Object.keys(groups).length > 0 ? groups : undefined,
@@ -1684,6 +1795,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
           const configs = loadSaveConfigs();
           const savedConfig = workflow.id ? configs[workflow.id] : null;
 
+          // Get the current generationsPath (user's local setting)
+          const currentGenPath = get().generationsPath;
+
           set({
             nodes: dedupedNodes,
             edges: workflow.edges,
@@ -1695,10 +1809,73 @@ export const useWorkflowStore = create<WorkflowStore>()(
             workflowId: workflow.id || null,
             workflowName: workflow.name,
             saveDirectoryPath: savedConfig?.directoryPath || null,
-            generationsPath: savedConfig?.generationsPath || null,
+            generationsPath: currentGenPath || savedConfig?.generationsPath || null,
             lastSavedAt: savedConfig?.lastSavedAt || null,
             hasUnsavedChanges: false,
           });
+
+          // If generationsPath is configured, save any embedded base64 images to disk
+          const genPath = get().generationsPath;
+          if (genPath) {
+            console.log("[loadWorkflow] Auto-saving embedded images to:", genPath);
+            const { updateNodeData } = get();
+
+            for (const node of dedupedNodes) {
+              if (node.type === "nanoBanana") {
+                const data = node.data as NanoBananaNodeData;
+
+                // Collect all unique base64 images to save (from history and current)
+                const imagesToSave: string[] = [];
+
+                // Add all images from history
+                if (data.imageHistory && data.imageHistory.length > 0) {
+                  for (const img of data.imageHistory) {
+                    if (img && img.startsWith("data:") && !imagesToSave.includes(img)) {
+                      imagesToSave.push(img);
+                    }
+                  }
+                }
+
+                // Add current outputImage if not already in history
+                if (data.outputImage && data.outputImage.startsWith("data:") && !imagesToSave.includes(data.outputImage)) {
+                  imagesToSave.push(data.outputImage);
+                }
+
+                // Save all collected images
+                let savedCurrentPath: string | null = null;
+                for (let i = 0; i < imagesToSave.length; i++) {
+                  const img = imagesToSave[i];
+                  try {
+                    const res = await fetch("/api/save-image", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        directoryPath: genPath,
+                        image: img,
+                      }),
+                    });
+                    const result = await res.json();
+                    if (result.success && result.path) {
+                      console.log(`[loadWorkflow] Saved imported image ${i + 1}/${imagesToSave.length}:`, result.path);
+                      // Track the path for the current output image
+                      if (img === data.outputImage) {
+                        savedCurrentPath = result.path;
+                      }
+                    }
+                  } catch (err) {
+                    console.error("[loadWorkflow] Failed to save imported image:", err);
+                  }
+                }
+
+                // Update node with the current image's path
+                if (savedCurrentPath) {
+                  updateNodeData(node.id, {
+                    outputImagePath: savedCurrentPath,
+                  });
+                }
+              }
+            }
+          }
         },
 
         clearWorkflow: async () => {
@@ -1927,6 +2104,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
           edges: state.edges,
           edgeStyle: state.edgeStyle,
           groups: state.groups,
+          generationsPath: state.generationsPath,
           // Don't persist image history to save space
         };
       },

@@ -122,7 +122,8 @@ export interface ImageHistoryItem {
 export interface NanoBananaNodeData extends BaseNodeData {
   inputImages: string[]; // Now supports multiple images
   inputPrompt: string | null;
-  outputImage: string | null;
+  outputImage: string | null; // Base64 for display
+  outputImagePath?: string | null; // File path for persistence
   aspectRatio: AspectRatioOption;
   resolution: Resolution; // Only used by Nano Banana Pro
   model: ModelType;

@@ -4,6 +4,7 @@ import { useRef, useState, useEffect, useMemo } from "react";
 import { useWorkflowStore, EdgeStyle, WorkflowFile } from "@/store/workflowStore";
 import { NodeType } from "@/types";
 import { useReactFlow } from "@xyflow/react";
+import { SettingsModal } from "./SettingsModal";
 
 interface NodeButtonProps {
   type: NodeType;
@@ -133,11 +134,14 @@ function GenerateComboButton() {
 }
 
 export function FloatingActionBar() {
-  const { nodes, isRunning, executeWorkflow, regenerateNode, stopWorkflow, validateWorkflow, edgeStyle, setEdgeStyle, saveWorkflow, loadWorkflow } =
+  const { nodes, isRunning, executeWorkflow, regenerateNode, stopWorkflow, validateWorkflow, edgeStyle, setEdgeStyle, saveWorkflow, exportPortableWorkflow, loadWorkflow } =
     useWorkflowStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [runMenuOpen, setRunMenuOpen] = useState(false);
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const runMenuRef = useRef<HTMLDivElement>(null);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
   const [isClient, setIsClient] = useState(false);
 
   // Mark client-side mount to avoid hydration mismatch
@@ -153,22 +157,25 @@ export function FloatingActionBar() {
     return selected.length === 1 ? selected[0] : null;
   }, [nodes]);
 
-  // Close run menu when clicking outside
+  // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (runMenuRef.current && !runMenuRef.current.contains(event.target as Node)) {
         setRunMenuOpen(false);
       }
+      if (saveMenuRef.current && !saveMenuRef.current.contains(event.target as Node)) {
+        setSaveMenuOpen(false);
+      }
     };
 
-    if (runMenuOpen) {
+    if (runMenuOpen || saveMenuOpen) {
       document.addEventListener("mousedown", handleClickOutside);
     }
 
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
-  }, [runMenuOpen]);
+  }, [runMenuOpen, saveMenuOpen]);
 
   const toggleEdgeStyle = () => {
     setEdgeStyle(edgeStyle === "angular" ? "curved" : "angular");
@@ -245,15 +252,55 @@ export function FloatingActionBar() {
 
         <div className="w-px h-5 bg-neutral-600 mx-1.5" />
 
-        <button
-          onClick={handleSave}
-          title="Save workflow"
-          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-        </button>
+        <div className="relative" ref={saveMenuRef}>
+          <button
+            onClick={() => setSaveMenuOpen(!saveMenuOpen)}
+            title="Save / Export options"
+            className="flex items-center gap-0.5 px-2 py-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            <svg
+              className={`w-3 h-3 transition-transform ${saveMenuOpen ? "rotate-180" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {saveMenuOpen && (
+            <div className="absolute bottom-full right-0 mb-2 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl overflow-hidden min-w-[160px]">
+              <button
+                onClick={() => {
+                  saveWorkflow();
+                  setSaveMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Save (Local Paths)
+              </button>
+              <button
+                onClick={() => {
+                  exportPortableWorkflow();
+                  setSaveMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-[11px] font-medium text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                </svg>
+                Export Portable
+              </button>
+            </div>
+          )}
+        </div>
 
         <button
           onClick={handleLoadClick}
@@ -262,6 +309,19 @@ export function FloatingActionBar() {
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+        </button>
+
+        <div className="w-px h-5 bg-neutral-600 mx-1.5" />
+
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
 
@@ -399,6 +459,20 @@ export function FloatingActionBar() {
             </div>
           )}
         </div>
+        <div className="w-px h-5 bg-neutral-600 mx-1.5" />
+
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="Settings"
+          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+
+        <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </div>
     </div>
   );
