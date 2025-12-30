@@ -41,6 +41,7 @@ export interface BaseNodeData extends Record<string, unknown> {
 // Image Input Node Data
 export interface ImageInputNodeData extends BaseNodeData {
   image: string | null;
+  imagePath?: string | null; // File path for persistence
   filename: string | null;
   dimensions: { width: number; height: number } | null;
 }
@@ -131,6 +132,7 @@ export interface NanoBananaNodeData extends BaseNodeData {
   status: NodeStatus;
   error: string | null;
   imageHistory?: string[]; // History of all generated images
+  imageHistoryPaths?: string[]; // File paths for history images (for persistence)
   historyIndex?: number;  // Currently viewed index in history
 }
 

@@ -187,7 +187,7 @@ interface WorkflowStore {
   stopWorkflow: () => void;
 
   // Save/Load
-  saveWorkflow: (name?: string) => void;
+  saveWorkflow: (name?: string) => Promise<void>;
   loadWorkflow: (workflow: WorkflowFile) => Promise<void>;
   exportPortableWorkflow: (name?: string) => Promise<void>;
   clearWorkflow: () => Promise<void>;
@@ -1182,10 +1182,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
                           .then((data) => {
                             console.log("[DEBUG executeWorkflow] Save result:", data);
                             if (data.success && data.path) {
-                              // Update outputImage to file path for persistence
-                              // Keep the base64 in memory for display, store path for saving
+                              const freshNode = get().nodes.find(n => n.id === node.id);
+                              const freshData = freshNode?.data as NanoBananaNodeData;
+                              const currentHistoryPaths = freshData?.imageHistoryPaths || [];
+
                               updateNodeData(node.id, {
                                 outputImagePath: data.path,
+                                imageHistoryPaths: [...currentHistoryPaths, data.path]
                               });
                             }
                           })
@@ -1521,8 +1524,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
                     .then((data) => {
                       console.log("[DEBUG] Save result:", data);
                       if (data.success && data.path) {
+                        const freshNode = get().nodes.find(n => n.id === nodeId);
+                        const freshData = freshNode?.data as NanoBananaNodeData;
+                        const currentHistoryPaths = freshData?.imageHistoryPaths || [];
+
                         updateNodeData(nodeId, {
                           outputImagePath: data.path,
+                          imageHistoryPaths: [...currentHistoryPaths, data.path]
                         });
                       }
                     })
@@ -1676,12 +1684,113 @@ export const useWorkflowStore = create<WorkflowStore>()(
           }
         },
 
-        saveWorkflow: (name?: string) => {
-          const { nodes, edges, edgeStyle, groups } = get();
+        saveWorkflow: async (name?: string) => {
+          const { nodes, edges, edgeStyle, groups, generationsPath, updateNodeData } = get();
+
+          // If generationsPath is configured, first save any unsaved images to disk
+          let updatedNodes = nodes;
+          if (generationsPath) {
+            updatedNodes = await Promise.all(nodes.map(async (node) => {
+              // Handle nanoBanana nodes
+              if (node.type === 'nanoBanana') {
+                const data = node.data as NanoBananaNodeData;
+                let dataUpdate: Partial<NanoBananaNodeData> = {};
+                let hasChanges = false;
+
+                // 1. Save current outputImage if it's base64 and not saved
+                if (data.outputImage && data.outputImage.startsWith('data:') && !data.outputImagePath) {
+                  try {
+                    const res = await fetch('/api/save-image', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ directoryPath: generationsPath, image: data.outputImage }),
+                    });
+                    const result = await res.json();
+                    if (result.success && result.path) {
+                      console.log('[saveWorkflow] Saved nanoBanana outputImage:', result.path);
+                      dataUpdate.outputImagePath = result.path;
+                      hasChanges = true;
+                    }
+                  } catch (e) {
+                    console.error('[saveWorkflow] Failed to save nanoBanana outputImage:', e);
+                  }
+                }
+
+                // 2. Save all history images that don't have paths yet
+                const history = data.imageHistory || [];
+                const historyPaths = data.imageHistoryPaths || [];
+
+                // We want to ensure historyPaths has the same length as history
+                const newHistoryPaths = [...historyPaths];
+                let historyChanged = false;
+
+                for (let i = 0; i < history.length; i++) {
+                  const img = history[i];
+                  // If we have an image at this index but no path at this index
+                  if (img && img.startsWith('data:') && (!newHistoryPaths[i])) {
+                    try {
+                      const res = await fetch('/api/save-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ directoryPath: generationsPath, image: img }),
+                      });
+                      const result = await res.json();
+                      if (result.success && result.path) {
+                        newHistoryPaths[i] = result.path;
+                        historyChanged = true;
+                      }
+                    } catch (e) {
+                      console.error(`[saveWorkflow] Failed to save history image at index ${i}:`, e);
+                    }
+                  }
+                }
+
+                if (historyChanged) {
+                  dataUpdate.imageHistoryPaths = newHistoryPaths;
+                  hasChanges = true;
+                }
+
+                if (hasChanges) {
+                  updateNodeData(node.id, dataUpdate);
+                  return {
+                    ...node,
+                    data: { ...data, ...dataUpdate }
+                  };
+                }
+              }
+              // Handle imageInput nodes (pasted/uploaded images)
+              else if (node.type === 'imageInput') {
+                const data = node.data as ImageInputNodeData;
+                if (data.image && data.image.startsWith('data:') && !data.imagePath) {
+                  try {
+                    const res = await fetch('/api/save-image', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        directoryPath: generationsPath,
+                        image: data.image,
+                      }),
+                    });
+                    const result = await res.json();
+                    if (result.success && result.path) {
+                      console.log('[saveWorkflow] Saved unsaved imageInput image:', result.path);
+                      updateNodeData(node.id, { imagePath: result.path });
+                      return {
+                        ...node,
+                        data: { ...data, imagePath: result.path }
+                      };
+                    }
+                  } catch (e) {
+                    console.error('[saveWorkflow] Failed to save imageInput image:', e);
+                  }
+                }
+              }
+              return node;
+            }));
+          }
 
           // Standard save: Strip base64 data if paths exist, to keep file size small
-          // This relies on local files being available (via outputImagePath)
-          const cleanNodes = nodes.map(node => {
+          const cleanNodes = updatedNodes.map(node => {
             if (node.type === 'nanoBanana' && (node.data as NanoBananaNodeData).outputImagePath) {
               return {
                 ...node,
@@ -1690,6 +1799,15 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   outputImage: null, // Remove base64, keep outputImagePath
                   imageHistory: [], // Clear history base64 too
                   inputImages: []   // Clear input base64
+                }
+              };
+            }
+            if (node.type === 'imageInput' && (node.data as ImageInputNodeData).imagePath) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  image: null, // Remove base64, keep imagePath
                 }
               };
             }
@@ -1722,11 +1840,14 @@ export const useWorkflowStore = create<WorkflowStore>()(
           const { nodes, edges, edgeStyle, groups } = get();
 
           // Portable export: Ensure all images are embedded as base64
-          // If we have paths but no base64, we need to load them
           const portableNodes = await Promise.all(nodes.map(async (node) => {
+            // Handle nanoBanana nodes
             if (node.type === 'nanoBanana') {
               const data = node.data as NanoBananaNodeData;
-              // If we have a path but no image (or want to ensure it's fresh), load it
+              let newData = { ...data };
+              let hasChanges = false;
+
+              // 1. Embed current output image
               if (data.outputImagePath && !data.outputImage) {
                 try {
                   const res = await fetch('/api/load-image', {
@@ -1736,13 +1857,70 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   });
                   const result = await res.json();
                   if (result.success && result.image) {
+                    newData.outputImage = result.image;
+                    hasChanges = true;
+                  }
+                } catch (e) {
+                  console.error("Failed to load nanoBanana output image for export:", e);
+                }
+              }
+
+              // 2. Embed all history images
+              if (data.imageHistoryPaths && data.imageHistoryPaths.length > 0) {
+                try {
+                  const currentHistory = data.imageHistory || [];
+                  const newHistory = [...currentHistory];
+                  let historyChanged = false;
+
+                  for (let i = 0; i < data.imageHistoryPaths.length; i++) {
+                    const path = data.imageHistoryPaths[i];
+                    // If we have a path but no base64 at this index
+                    if (path && (!newHistory[i] || !newHistory[i].startsWith('data:'))) {
+                      const res = await fetch('/api/load-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path })
+                      });
+                      const result = await res.json();
+                      if (result.success && result.image) {
+                        newHistory[i] = result.image;
+                        historyChanged = true;
+                      }
+                    }
+                  }
+
+                  if (historyChanged) {
+                    newData.imageHistory = newHistory;
+                    hasChanges = true;
+                  }
+                } catch (err) {
+                  console.error("Failed to embed history for portable export:", err);
+                }
+              }
+
+              if (hasChanges) {
+                return { ...node, data: newData };
+              }
+            }
+            // Handle imageInput nodes
+            else if (node.type === 'imageInput') {
+              const data = node.data as ImageInputNodeData;
+              if (data.imagePath && (!data.image || !data.image.startsWith('data:'))) {
+                try {
+                  const res = await fetch('/api/load-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: data.imagePath })
+                  });
+                  const result = await res.json();
+                  if (result.success && result.image) {
                     return {
                       ...node,
-                      data: { ...data, outputImage: result.image }
+                      data: { ...data, image: result.image }
                     };
                   }
                 } catch (e) {
-                  console.error("Failed to load image for export:", e);
+                  console.error("Failed to load imageInput image for export:", e);
                 }
               }
             }
@@ -1798,8 +1976,87 @@ export const useWorkflowStore = create<WorkflowStore>()(
           // Get the current generationsPath (user's local setting)
           const currentGenPath = get().generationsPath;
 
+          // Preload images from disk for nodes that have paths but no base64
+          const nodesWithImages = await Promise.all(dedupedNodes.map(async (node) => {
+            // Handle nanoBanana nodes
+            if (node.type === "nanoBanana") {
+              const data = node.data as NanoBananaNodeData;
+              let newData = { ...data };
+              let hasChanges = false;
+
+              // 1. Load active image from disk
+              if (data.outputImagePath && !data.outputImage) {
+                try {
+                  const res = await fetch("/api/load-image", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path: data.outputImagePath }),
+                  });
+                  const result = await res.json();
+                  if (result.success && result.image) {
+                    console.log("[loadWorkflow] Loaded nanoBanana image from disk:", data.outputImagePath);
+                    newData.outputImage = result.image;
+                    hasChanges = true;
+                  }
+                } catch (err) {
+                  console.error("[loadWorkflow] Failed to load nanoBanana image from disk:", err);
+                }
+              }
+
+              // 2. Load entire history from disk if history is empty but paths exist
+              if (data.imageHistoryPaths && data.imageHistoryPaths.length > 0 && (!data.imageHistory || data.imageHistory.length === 0)) {
+                try {
+                  console.log(`[loadWorkflow] Restoring ${data.imageHistoryPaths.length} history images from disk...`);
+                  const historyImages = await Promise.all(data.imageHistoryPaths.map(async (path) => {
+                    if (!path) return null;
+                    const res = await fetch("/api/load-image", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ path }),
+                    });
+                    const result = await res.json();
+                    return result.success ? result.image : null;
+                  }));
+
+                  newData.imageHistory = historyImages.filter((img): img is string => img !== null);
+                  hasChanges = true;
+                } catch (err) {
+                  console.error("[loadWorkflow] Failed to restore history from disk:", err);
+                }
+              }
+
+              if (hasChanges) {
+                return { ...node, data: newData };
+              }
+            }
+            // Handle imageInput nodes
+            else if (node.type === "imageInput") {
+              const data = node.data as ImageInputNodeData;
+              if (data.imagePath && !data.image) {
+                try {
+                  const res = await fetch("/api/load-image", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ path: data.imagePath }),
+                  });
+                  const result = await res.json();
+                  if (result.success && result.image) {
+                    console.log("[loadWorkflow] Loaded imageInput image from disk:", data.imagePath);
+                    return {
+                      ...node,
+                      data: { ...data, image: result.image }
+                    };
+                  }
+                } catch (err) {
+                  console.error("[loadWorkflow] Failed to load imageInput image from disk:", err);
+                }
+              }
+            }
+            return node;
+          }));
+
           set({
-            nodes: dedupedNodes,
+            nodes: nodesWithImages,
             edges: workflow.edges,
             edgeStyle: workflow.edgeStyle || "angular",
             groups: workflow.groups || {},
