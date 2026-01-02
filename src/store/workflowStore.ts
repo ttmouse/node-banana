@@ -40,6 +40,7 @@ import {
   clearAllNodeImageData,
   NodeImagePayload
 } from "@/utils/imageCache";
+import { useSettingsStore } from "@/store/settingsStore";
 
 export type EdgeStyle = "angular" | "curved";
 
@@ -1095,13 +1096,24 @@ export const useWorkflowStore = create<WorkflowStore>()(
                   try {
                     const nodeData = node.data as NanoBananaNodeData;
 
+                    // Get API config from settings store
+                    const { apiConfig } = useSettingsStore.getState();
+
+                    // Handle "original" aspectRatio: if no images, default to "1:1", otherwise undefined
+                    const isOriginalAspectRatio = nodeData.aspectRatio === "original";
+                    const effectiveAspectRatio = isOriginalAspectRatio
+                      ? (images.length > 0 ? undefined : "1:1")
+                      : nodeData.aspectRatio;
+
                     const requestPayload = {
                       images,
                       prompt: finalPrompt,
-                      aspectRatio: nodeData.aspectRatio,
-                      resolution: nodeData.resolution,
+                      aspectRatio: effectiveAspectRatio,
+                      resolution: isOriginalAspectRatio ? undefined : nodeData.resolution,
                       model: nodeData.model,
                       useGoogleSearch: nodeData.useGoogleSearch,
+                      apiKey: apiConfig.apiKey || undefined,
+                      apiEndpoint: apiConfig.apiEndpoint || undefined,
                     };
 
                     const response = await fetch("/api/generate", {
@@ -1456,16 +1468,27 @@ export const useWorkflowStore = create<WorkflowStore>()(
                 error: null,
               });
 
+              // Get API config from settings store
+              const { apiConfig } = useSettingsStore.getState();
+
+              // Handle "original" aspectRatio: if no images, default to "1:1", otherwise undefined
+              const isOriginalAspectRatio = nodeData.aspectRatio === "original";
+              const effectiveAspectRatio = isOriginalAspectRatio
+                ? (images.length > 0 ? undefined : "1:1")
+                : nodeData.aspectRatio;
+
               const response = await fetch("/api/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   images,
                   prompt: finalPrompt,
-                  aspectRatio: nodeData.aspectRatio,
-                  resolution: nodeData.resolution,
+                  aspectRatio: effectiveAspectRatio,
+                  resolution: isOriginalAspectRatio ? undefined : nodeData.resolution,
                   model: nodeData.model,
                   useGoogleSearch: nodeData.useGoogleSearch,
+                  apiKey: apiConfig.apiKey || undefined,
+                  apiEndpoint: apiConfig.apiEndpoint || undefined,
                 }),
               });
 

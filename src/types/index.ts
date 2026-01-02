@@ -207,6 +207,8 @@ export interface GenerateRequest {
   resolution?: Resolution; // Only for Nano Banana Pro
   model?: ModelType;
   useGoogleSearch?: boolean; // Only for Nano Banana Pro
+  apiKey?: string; // Optional: use custom API key
+  apiEndpoint?: string; // Optional: use custom API endpoint
 }
 
 export interface GenerateResponse {
@@ -261,4 +263,10 @@ export interface WorkflowSaveConfig {
   directoryPath: string;
   generationsPath: string | null;
   lastSavedAt: number;
+}
+
+// API Configuration (for custom API endpoints)
+export interface APIConfig {
+  apiKey: string;
+  apiEndpoint: string;
 }

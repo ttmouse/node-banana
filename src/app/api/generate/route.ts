@@ -6,15 +6,41 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { GenerateRequest, GenerateResponse, ModelType } from "@/types";
+import { GenerateRequest, GenerateResponse, ModelType, AspectRatio, Resolution } from "@/types";
 
 export const maxDuration = 300; // 5 minute timeout for Gemini API calls
 export const dynamic = 'force-dynamic'; // Ensure this route is always dynamic
 
-// Map model types to Gemini model IDs
+// Map model types to Gemini model IDs (for official Google API)
 const MODEL_MAP: Record<ModelType, string> = {
   "nano-banana": "gemini-2.5-flash-image", // Updated to correct model name
   "nano-banana-pro": "gemini-3-pro-image-preview",
+};
+
+// Build custom endpoint model ID with aspect ratio and resolution suffixes
+// Example: gemini-3-pro-image-4k-16x9
+const getCustomEndpointModelId = (
+  model: ModelType,
+  aspectRatio?: AspectRatio,
+  resolution?: Resolution
+): string => {
+  // Base model name for custom endpoint
+  const baseModel = model === "nano-banana-pro" ? "gemini-3-pro-image" : "gemini-2.5-flash-image";
+
+  let modelId = baseModel;
+
+  // Add resolution suffix (4k) if specified
+  if (resolution === "4K") {
+    modelId += "-4k";
+  }
+
+  // Add aspect ratio suffix (e.g., 16x9) if specified and not 1:1
+  if (aspectRatio && aspectRatio !== "1:1") {
+    const ratioSuffix = aspectRatio.replace(":", "x");
+    modelId += `-${ratioSuffix}`;
+  }
+
+  return modelId;
 };
 
 export async function POST(request: NextRequest) {
@@ -23,25 +49,39 @@ export async function POST(request: NextRequest) {
   console.log(`[API:${requestId}] Timestamp: ${new Date().toISOString()}`);
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    console.log(`[API:${requestId}] Parsing request body...`);
+    const body: GenerateRequest = await request.json();
+    const {
+      images,
+      prompt,
+      model = "nano-banana-pro",
+      aspectRatio,
+      resolution,
+      useGoogleSearch,
+      apiKey: requestApiKey,
+      apiEndpoint
+    } = body;
+
+    // Use API key from request, fallback to environment variable
+    const apiKey = requestApiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       console.error(`[API:${requestId}] ❌ No API key configured`);
       return NextResponse.json<GenerateResponse>(
         {
           success: false,
-          error: "API key not configured. Add GEMINI_API_KEY to .env.local",
+          error: "API key not configured. Add GEMINI_API_KEY to .env.local or configure in Settings.",
         },
         { status: 500 }
       );
     }
 
-    console.log(`[API:${requestId}] Parsing request body...`);
-    const body: GenerateRequest = await request.json();
-    const { images, prompt, model = "nano-banana-pro", aspectRatio, resolution, useGoogleSearch } = body;
+    // Check if using custom endpoint
+    const isCustomEndpoint = !!apiEndpoint;
 
     console.log(`[API:${requestId}] Request parameters:`);
-    console.log(`[API:${requestId}]   - Model: ${model} -> ${MODEL_MAP[model]}`);
+    console.log(`[API:${requestId}]   - Model: ${model}`);
+    console.log(`[API:${requestId}]   - Custom Endpoint: ${isCustomEndpoint ? apiEndpoint : 'No (using official Google API)'}`);
     console.log(`[API:${requestId}]   - Images count: ${images?.length || 0}`);
     console.log(`[API:${requestId}]   - Prompt length: ${prompt?.length || 0} chars`);
     console.log(`[API:${requestId}]   - Aspect Ratio: ${aspectRatio || 'default'}`);
@@ -81,7 +121,13 @@ export async function POST(request: NextRequest) {
 
     // Initialize Gemini client
     console.log(`[API:${requestId}] Initializing Gemini client...`);
-    const ai = new GoogleGenAI({ apiKey });
+    const aiConfig: { apiKey: string; httpOptions?: { baseUrl: string } } = { apiKey };
+    if (isCustomEndpoint) {
+      aiConfig.httpOptions = { baseUrl: apiEndpoint };
+      console.log(`[API:${requestId}]   Using custom endpoint: ${apiEndpoint}`);
+    }
+    console.log(`[API:${requestId}]   API Key (first 8 chars): ${apiKey.substring(0, 8)}...`);
+    const ai = new GoogleGenAI(aiConfig);
 
     // Build request parts array with prompt and all images (if any)
     console.log(`[API:${requestId}] Building request parts...`);
@@ -97,27 +143,40 @@ export async function POST(request: NextRequest) {
     console.log(`[API:${requestId}] Request parts count: ${requestParts.length} (1 text + ${imageData.length} images)`);
 
 
+    // Determine model ID based on endpoint type
+    // For custom endpoints: use model ID with suffixes (e.g., gemini-3-pro-image-4k-16x9)
+    // For official API: use standard model ID (e.g., gemini-3-pro-image-preview)
+    const effectiveModelId = isCustomEndpoint
+      ? getCustomEndpointModelId(model, aspectRatio, resolution)
+      : MODEL_MAP[model];
+    console.log(`[API:${requestId}]   Effective model ID: ${effectiveModelId}`);
+
     // Build config object based on model capabilities
     console.log(`[API:${requestId}] Building generation config...`);
     const config: any = {
       responseModalities: ["IMAGE", "TEXT"],
     };
 
-    // Add imageConfig for both models (both support aspect ratio)
-    if (aspectRatio) {
-      config.imageConfig = {
-        aspectRatio,
-      };
-      console.log(`[API:${requestId}]   Added aspect ratio: ${aspectRatio}`);
-    }
-
-    // Add resolution only for Nano Banana Pro
-    if (model === "nano-banana-pro" && resolution) {
-      if (!config.imageConfig) {
-        config.imageConfig = {};
+    // Only add imageConfig for official Google API (custom endpoints use model ID suffixes)
+    if (!isCustomEndpoint) {
+      // Add imageConfig for both models (both support aspect ratio)
+      if (aspectRatio) {
+        config.imageConfig = {
+          aspectRatio,
+        };
+        console.log(`[API:${requestId}]   Added aspect ratio: ${aspectRatio}`);
       }
-      config.imageConfig.imageSize = resolution;
-      console.log(`[API:${requestId}]   Added resolution: ${resolution}`);
+
+      // Add resolution only for Nano Banana Pro
+      if (model === "nano-banana-pro" && resolution) {
+        if (!config.imageConfig) {
+          config.imageConfig = {};
+        }
+        config.imageConfig.imageSize = resolution;
+        console.log(`[API:${requestId}]   Added resolution: ${resolution}`);
+      }
+    } else {
+      console.log(`[API:${requestId}]   Custom endpoint: skipping imageConfig (using model ID suffixes)`);
     }
 
     // Add tools array for Google Search (only Nano Banana Pro)
@@ -150,7 +209,7 @@ export async function POST(request: NextRequest) {
         }
 
         response = await ai.models.generateContent({
-          model: MODEL_MAP[model],
+          model: effectiveModelId,
           contents: [
             {
               role: "user",
